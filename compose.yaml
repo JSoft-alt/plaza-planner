@@ -1,0 +1,36 @@
+# Pin the same OSRM release/digest for preprocessing and serving.
+x-osrm: &osrm
+  image: ghcr.io/project-osrm/osrm-backend:26.10.0-debian@sha256:55dbfd47d984c2cacd64e32901b4321c86b5ec761438e69aa053dc78698a786f
+services:
+  prepare:
+    <<: *osrm
+    profiles: [tools]
+    volumes:
+      - ./osrm-data:/data
+      - ./scripts/prepare-osrm.sh:/prepare-osrm.sh:ro
+    entrypoint: [/bin/sh, /prepare-osrm.sh]
+  osrm:
+    <<: *osrm
+    command: [osrm-routed, --algorithm, mld, --max-table-size, '100', /data/map.osrm]
+    volumes:
+      - ./osrm-data:/data:ro
+    restart: unless-stopped
+    # OSRM is available only on the Compose network, never a public port.
+  planner:
+    build: .
+    environment:
+      OSRM_URL: http://osrm:5000
+      PLANNER_DATA_DIR: /app/data
+    volumes:
+      - planner-data:/app/data
+    ports:
+      - '127.0.0.1:8011:8011'
+    depends_on: [osrm]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/api/bootstrap', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  planner-data:

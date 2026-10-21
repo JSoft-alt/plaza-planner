@@ -1,0 +1,9 @@
+.venv/
+data/
+__pycache__/
+.env
+*.pyc
+frontend/node_modules/
+osrm-data/
+*.zip
+.DS_Store

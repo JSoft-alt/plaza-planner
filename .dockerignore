@@ -1,0 +1,10 @@
+.git
+.venv
+data
+.env
+__pycache__
+**/__pycache__
+*.pyc
+frontend/node_modules
+osrm-data
+*.zip

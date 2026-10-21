@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light"><title>巡访 · 商业区行程规划</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/maplibre-gl.css"><link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/maplibre-gl.js" defer></script><script src="/static/vendor/terra-draw.js" defer></script><script src="/static/vendor/terra-draw-adapter.js" defer></script>
+  <script src="/static/map-geometry.js" defer></script><script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="巡访首页"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13"/><path d="m21 10-3 9-8 3 3-9zM16 3v4M29 16h-4M16 29v-4M3 16h4"/></svg><strong>巡访</strong><span>商业区行程规划</span></a>
+  <nav aria-label="主导航"><button class="nav active" data-view="planner">规划行程</button><button class="nav" data-view="history">历史记录</button><button class="nav" data-view="schedules">定时搜索</button></nav>
+</header>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<main>
+<section id="planner" class="view">
+  <div class="page-heading"><div><h1>把下一趟，安排好。</h1><p>找到合适的商业区，按方位分趟，再计算驾驶路线。</p></div><button id="newSearch" class="text-button">新建搜索</button></div>
+  <div class="workspace">
+    <aside class="search-panel" aria-label="搜索设置">
+      <form id="searchForm" novalidate>
+        <h2>从哪里出发</h2>
+        <label for="address">起点地址</label>
+        <div class="input-action"><input id="address" autocomplete="street-address" placeholder="输入门牌、街道与城市" maxlength="300"><button type="button" id="lookup">查找</button></div>
+        <button type="button" id="publicLookup" class="text-button">查询公开地点或国际地址</button><div id="addressMatches" aria-live="polite"></div>
+        <p id="originSummary" class="origin-summary" hidden></p><p class="field-error" id="error-origin" role="alert"></p>
+        <button type="button" id="locate" class="text-button location"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>使用当前位置</button>
+        <div class="form-divider"></div>
+        <h2>搜索哪一片区域</h2>
+        <fieldset class="segmented"><legend class="sr-only">搜索范围模式</legend><label><input type="radio" name="mode" value="circle" checked><span>圆形范围</span></label><label><input type="radio" name="mode" value="polygon"><span>绘制区域</span></label></fieldset>
+        <div id="diameterGroup"><label for="diameter">搜索直径 <span class="label-note">英里</span></label><input type="number" id="diameter" value="10" min="0.1" max="30" step="0.1" required><p class="field-error" id="error-diameter_miles" role="alert"></p></div>
+        <p id="areaSummary" class="hint" hidden>以绘制边界为准，直径不参与搜索。</p>
+        <button type="button" id="openMap" class="map-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2zM9 3v16M15 5v16"/></svg><span>打开地图，设定区域</span><span aria-hidden="true">↗</span></button>
+        <p class="field-error" id="error-polygon" role="alert"></p>
+        <div class="form-divider"></div>
+        <h2>筛选与分趟</h2>
+        <div class="two-fields"><div><label for="minShops">最少小店数</label><input type="number" id="minShops" value="3" min="1" max="100" step="1" required><p class="field-error" id="error-min_shops" role="alert"></p></div><div><label for="batchSize">每趟地点数</label><input type="number" id="batchSize" value="5" min="1" max="15" step="1" required><p class="field-error" id="error-batch_size" role="alert"></p></div></div>
+        <details class="advanced"><summary>更多选项</summary><label for="baseline">扫掠起始角 <span class="label-note">度</span></label><input id="baseline" type="number" value="0" min="0" max="359.99" step="0.1"><p class="field-error" id="error-baseline" role="alert"></p><p class="hint">北为 0°，顺时针排列。起始角可旋转队列的起始方向。</p></details>
+        <p class="field-error" id="error-form" role="alert"></p>
+        <button id="search" type="submit" class="primary full" disabled>搜索并保存全部商业区</button>
+      </form>
+      <p class="coverage">依据已映射的小店数量筛选。地图数据可能缺失，结果不代表全部实体商户。</p>
+    </aside>
+    <div class="results-panel">
+      <div id="empty" class="empty"><svg class="sweep-illustration" viewBox="0 0 240 240" aria-hidden="true"><circle cx="120" cy="120" r="94"/><circle cx="120" cy="120" r="62"/><circle cx="120" cy="120" r="30"/><path d="M120 16v208M16 120h208M120 120 184 51"/><circle class="dot" cx="156" cy="78" r="6"/><circle class="dot" cx="67" cy="142" r="5"/><circle class="dot" cx="171" cy="171" r="5"/></svg><h2>这一趟，从起点开始。</h2><p>确认地址并设定范围，<br>符合条件的商业区会按方位依次排在这里。</p><div class="empty-flow"><span>搜索商业区</span><i>→</i><span>按序分趟</span><i>→</i><span>计算路线</span></div></div>
+      <section id="scanResults" hidden>
+        <div id="activeProgress" class="progress-area" hidden><div class="row"><strong id="progressText"></strong><button id="cancelScan" class="text-button">取消搜索</button></div><p id="searchTiming" class="search-timing"></p><progress id="progress"></progress></div>
+        <div id="scanNotice" class="notice" hidden><span id="scanMessage"></span><button id="retryScan">继续重试</button></div>
+        <div class="results-heading"><div><h2><span id="resultCount">0</span> 个商业区</h2><p id="scanLabel"></p></div><button id="exportScan">导出 JSON</button></div>
+        <div class="trip-controls"><div><label for="tripSelect">当前行程</label><select id="tripSelect"><option value="">尚未分趟</option></select></div><button id="nextTrip">取下一趟</button><button id="previewSelection" class="text-button" disabled>查看所选地点</button></div>
+        <div class="routing-check"><button id="checkRouting" class="text-button">检查路线服务</button><p id="routingStatus" class="hint" role="status"></p></div>
+        <section id="tripPanel" class="trip-panel" hidden><div class="row"><div><h3 id="tripTitle"></h3><p id="tripDescription"></p></div><button id="calculate" class="primary">计算路线</button></div><label class="check"><input id="returnOrigin" type="checkbox">最后返回本趟起点（下一趟从返回点接续）</label><p id="routeError" class="field-error" role="alert"></p><div id="routeSummary" hidden></div></section>
+        <div class="list-caption"><span>扫掠顺序</span><span>距离为距起点直线距离</span></div>
+        <ol id="plazaList" class="plaza-list"></ol>
+        <p id="zeroResults" class="hint" hidden>未找到满足条件的已映射商业区。可降低小店数或扩大范围后重新搜索。</p>
+      </section>
+    </div>
+  </div>
+</section>
+<section id="history" class="view" hidden>
+  <div class="page-heading"><div><h1>历史记录</h1><p>搜索范围、全部结果与每趟路线，都保存在这里。</p></div><button id="clearHistory" class="danger">清空历史</button></div>
+  <div class="filter-bar"><input id="historyQuery" type="search" aria-label="按起点搜索历史" placeholder="按起点地址搜索"><select id="historyStatus" aria-label="按搜索状态筛选"><option value="">全部状态</option><option value="complete">已完成</option><option value="partial">未完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select><button id="filterHistory">筛选</button></div>
+  <div id="historyList"></div><div class="pagination"><button id="historyPrev">上一页</button><span id="historyPage"></span><button id="historyNext">下一页</button></div>
+</section>
+<section id="schedules" class="view" hidden>
+  <div class="page-heading"><div><h1>定时搜索</h1><p>按计划刷新商业区结果，自动保存到历史记录。</p></div><button id="addSchedule" class="primary">新增定时搜索</button></div>
+  <p class="scope-note">应用运行时执行。停机期间错过的运行跳过；同一计划不重叠执行。仅搜索与保存，不分享地点。</p><div id="scheduleList"></div>
+</section>
+</main>
+<dialog id="mapDialog" class="map-dialog" aria-labelledby="mapTitle">
+  <div class="map-header"><h2 id="mapTitle">设定搜索区域</h2><button id="mapClose" aria-label="取消并关闭地图">关闭</button></div>
+  <div id="mapEditorTools" class="map-tools">
+    <div class="map-address"><input id="mapAddress" aria-label="在地图中查找地址" placeholder="查找地址或地点"><button id="mapLookup">美国街道地址</button><button id="publicMapLookup" class="text-button">公开地点 / 国际地址</button></div><div id="mapMatches" aria-live="polite"></div>
+    <div class="map-actions"><select id="mapMode" aria-label="地图搜索模式"><option value="circle">圆形范围</option><option value="polygon">绘制区域</option></select><label id="mapDiameterLabel">直径 <input id="mapDiameter" type="number" min="0.1" max="30" step="0.1" value="10"> 英里</label><button id="mapLocate" class="icon-button">使用当前位置</button><button id="movePin">移动起点</button><button id="drawPolygon">开始绘制</button><button id="undoVertex">撤销顶点</button><button id="finishPolygon">完成绘制</button><button id="clearPolygon">清除边界</button></div>
+    <p id="mapInstruction" class="hint"></p>
+  </div>
+  <div id="areaMap" tabindex="0" aria-label="搜索区域地图，使用方向键平移，按地图工具绘制边界"></div>
+  <div id="mapError" class="map-error" role="alert" hidden></div>
+  <details id="vertexEditor" class="vertex-editor"><summary>用键盘编辑边界顶点</summary><div id="vertexRows"></div><button id="addVertex">在地图中心添加顶点</button></details>
+  <div class="map-footer"><div><p id="mapOriginLabel"></p><label id="confirmOriginLabel" class="check"><input id="confirmOrigin" type="checkbox">我已核对地图中的起点位置</label><p id="mapValidation" class="field-error" role="alert"></p></div><div class="footer-buttons"><button id="mapCancel">取消</button><button id="applyArea" class="primary">应用区域</button></div></div>
+</dialog>
+<dialog id="scheduleDialog" class="small-dialog" aria-labelledby="scheduleTitle"><form id="scheduleForm" novalidate>
+  <div class="row"><h2 id="scheduleTitle">新增定时搜索</h2><button type="button" id="closeSchedule">关闭</button></div>
+  <p id="scheduleArea" class="hint"></p><button id="useCurrentSettings" type="button" class="text-button">使用规划页当前搜索设置</button><label for="scheduleName">计划名称</label><input id="scheduleName" required maxlength="100">
+  <label for="frequency">执行频率</label><select id="frequency"><option value="daily">每天</option><option value="weekdays">工作日</option><option value="weekly">每周一</option><option value="advanced">自定义 cron</option></select>
+  <div id="simpleTime"><label for="scheduleTime">执行时间</label><input type="time" id="scheduleTime" value="09:00" required></div>
+  <div id="advancedCron" hidden><label for="cronExpression">Cron 表达式</label><input id="cronExpression" value="0 9 * * *" placeholder="分 时 日 月 周"><p class="hint">五段格式；周日为 0 或 7。日与星期都有限制时须同时满足。</p></div>
+  <label for="scheduleTimezone">时区</label><input id="scheduleTimezone" value="America/New_York" required><p class="field-error" id="error-cron" role="alert"></p><p class="field-error" id="error-timezone" role="alert"></p>
+  <label class="check"><input type="checkbox" id="scheduleEnabled" checked>启用此计划</label>
+  <p id="scheduleError" class="field-error" role="alert"></p><button type="submit" class="primary full" id="saveSchedule">保存计划</button>
+</form></dialog>
+<dialog id="shareDialog" class="small-dialog" aria-labelledby="shareTitle"><h2 id="shareTitle">分享地点</h2><p id="shareName"></p><p id="shareInfo" class="hint"></p><label for="shareUrl">Google 地点链接</label><input id="shareUrl" readonly><div class="share-actions"><button id="copyShare" class="primary">复制链接</button><button id="nativeShare">系统分享</button><button id="closeShare">关闭</button></div></dialog>
+<dialog id="mapsRouteDialog" class="small-dialog" aria-labelledby="mapsRouteTitle"><div class="row"><h2 id="mapsRouteTitle">在 Google Maps 中打开</h2><button id="closeMapsRoute">关闭</button></div><p class="hint">保留本趟驾驶顺序。Google 会用自己的路网重新计算道路与时间，可能与本应用不同。</p><h3>电脑 / 支持多站点的 Google Maps 应用</h3><div id="mapsDesktop" class="maps-links"></div><h3>手机浏览器</h3><p class="hint">每段最多 4 个目的地；上一段终点就是下一段起点。按顺序打开，避免超出中途点限制。</p><div id="mapsMobile" class="maps-links"></div><details><summary>逐站导航</summary><p class="hint">部分 Google Maps 产品忽略中途点时，按这些单段链接逐站打开。</p><div id="mapsLegs" class="maps-links"></div></details></dialog>
+<dialog id="confirmDialog" class="small-dialog" aria-labelledby="confirmTitle"><h2 id="confirmTitle">确认删除</h2><p id="confirmText"></p><div class="share-actions"><button id="confirmNo">取消</button><button id="confirmYes" class="danger">删除</button></div></dialog>
+</body></html>

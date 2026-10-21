@@ -1,0 +1,379 @@
+{
+  "excluded_names_or_brands": [
+    "Walmart",
+    "Home Depot",
+    "Target",
+    "Costco",
+    "Best Buy",
+    "Lowe's",
+    "Dick's Sporting Goods",
+    "KFC",
+    "McDonald's",
+    "Burger King",
+    "Subway",
+    "Starbucks",
+    "CVS",
+    "Walgreens",
+    "Apple Store",
+    "Planet Fitness",
+    "Anytime Fitness",
+    "LA Fitness",
+    "24 Hour Fitness",
+    "Dollar Tree",
+    "Dollar General",
+    "Family Dollar",
+    "Aldi",
+    "Lidl",
+    "Whole Foods Market",
+    "Trader Joe's",
+    "Sam's Club",
+    "BJ's Wholesale Club",
+    "7-Eleven",
+    "Circle K",
+    "Dunkin'",
+    "Tim Hortons",
+    "PetSmart",
+    "Petco",
+    "Barnes & Noble",
+    "The UPS Store",
+    "Wegmans",
+    "ShopRite",
+    "Stop & Shop",
+    "Kroger",
+    "Publix",
+    "Safeway",
+    "Albertsons",
+    "H-E-B",
+    "Food Lion",
+    "Hannaford",
+    "Giant Food",
+    "Winn-Dixie",
+    "Meijer",
+    "Apple",
+    "Walmart Supercenter",
+    "Lowes",
+    "Dicks Sporting Goods",
+    "McDonalds",
+    "Dunkin",
+    "Great Clips",
+    "Supercuts",
+    "Rite Aid",
+    "Wawa",
+    "Sheetz",
+    "Ace Hardware"
+  ],
+  "excluded_shops": [
+    "mall",
+    "supermarket",
+    "department_store",
+    "wholesale",
+    "electronics"
+  ],
+  "excluded_amenities": [
+    "bank",
+    "atm"
+  ],
+  "categories": [
+    {
+      "id": "nails",
+      "label": "美甲",
+      "tags": {
+        "shop": [
+          "nails"
+        ],
+        "beauty": [
+          "nails",
+          "manicure",
+          "pedicure"
+        ]
+      },
+      "name_words": [
+        "nail",
+        "spa",
+        "manicure",
+        "pedicure",
+        "nails"
+      ]
+    },
+    {
+      "id": "hair",
+      "label": "理发",
+      "tags": {
+        "shop": [
+          "hairdresser",
+          "barber"
+        ]
+      }
+    },
+    {
+      "id": "laundry",
+      "label": "洗衣 / 干洗",
+      "tags": {
+        "shop": [
+          "laundry",
+          "dry_cleaning"
+        ]
+      }
+    },
+    {
+      "id": "beauty",
+      "label": "美容",
+      "tags": {
+        "shop": [
+          "beauty",
+          "cosmetics"
+        ],
+        "beauty": [
+          "facial",
+          "skin_care",
+          "tanning"
+        ]
+      }
+    },
+    {
+      "id": "chinese",
+      "label": "中餐",
+      "tags": {
+        "cuisine": [
+          "chinese",
+          "asian",
+          "dim_sum",
+          "szechuan",
+          "cantonese"
+        ]
+      }
+    },
+    {
+      "id": "italian",
+      "label": "意餐 / 披萨",
+      "tags": {
+        "cuisine": [
+          "italian",
+          "pizza"
+        ]
+      }
+    },
+    {
+      "id": "pet",
+      "label": "宠物",
+      "tags": {
+        "shop": [
+          "pet",
+          "pet_grooming"
+        ]
+      }
+    },
+    {
+      "id": "bubbletea",
+      "label": "奶茶",
+      "tags": {
+        "cuisine": [
+          "bubble_tea",
+          "tea"
+        ],
+        "shop": [
+          "tea"
+        ]
+      },
+      "name_words": [
+        "bubble tea",
+        "boba",
+        "tea"
+      ]
+    },
+    {
+      "id": "coffee",
+      "label": "独立咖啡",
+      "tags": {
+        "amenity": [
+          "cafe"
+        ],
+        "shop": [
+          "coffee"
+        ]
+      }
+    },
+    {
+      "id": "florist",
+      "label": "花店",
+      "tags": {
+        "shop": [
+          "florist"
+        ]
+      }
+    },
+    {
+      "id": "bakery",
+      "label": "面包",
+      "tags": {
+        "shop": [
+          "bakery",
+          "pastry"
+        ]
+      }
+    },
+    {
+      "id": "books",
+      "label": "独立书店",
+      "tags": {
+        "shop": [
+          "books"
+        ]
+      }
+    },
+    {
+      "id": "massage",
+      "label": "按摩 / 针灸",
+      "tags": {
+        "shop": [
+          "massage"
+        ],
+        "healthcare": [
+          "acupuncture"
+        ]
+      }
+    },
+    {
+      "id": "auto",
+      "label": "汽修",
+      "tags": {
+        "shop": [
+          "car_repair",
+          "tyres"
+        ]
+      }
+    },
+    {
+      "id": "carwash",
+      "label": "洗车",
+      "tags": {
+        "amenity": [
+          "car_wash"
+        ]
+      }
+    },
+    {
+      "id": "convenience",
+      "label": "独立便利",
+      "tags": {
+        "shop": [
+          "convenience"
+        ]
+      }
+    },
+    {
+      "id": "hardware",
+      "label": "独立五金",
+      "tags": {
+        "shop": [
+          "hardware",
+          "doityourself"
+        ]
+      }
+    },
+    {
+      "id": "secondhand",
+      "label": "二手",
+      "tags": {
+        "shop": [
+          "second_hand",
+          "charity",
+          "antiques"
+        ]
+      }
+    },
+    {
+      "id": "yoga",
+      "label": "瑜伽",
+      "tags": {
+        "sport": [
+          "yoga"
+        ]
+      },
+      "name_words": [
+        "yoga"
+      ]
+    },
+    {
+      "id": "martial",
+      "label": "武术",
+      "tags": {
+        "sport": [
+          "martial_arts",
+          "karate",
+          "taekwondo",
+          "judo"
+        ]
+      },
+      "name_words": [
+        "martial arts",
+        "karate",
+        "taekwondo"
+      ]
+    },
+    {
+      "id": "pharmacy",
+      "label": "独立药房",
+      "tags": {
+        "amenity": [
+          "pharmacy"
+        ],
+        "shop": [
+          "chemist"
+        ]
+      }
+    },
+    {
+      "id": "pawn",
+      "label": "当铺",
+      "tags": {
+        "shop": [
+          "pawnbroker"
+        ]
+      }
+    },
+    {
+      "id": "tattoo",
+      "label": "纹身",
+      "tags": {
+        "shop": [
+          "tattoo"
+        ]
+      }
+    },
+    {
+      "id": "small_retail",
+      "label": "小零售",
+      "tags": {
+        "shop": [
+          "clothes",
+          "shoes",
+          "gift",
+          "jewelry",
+          "jewellery",
+          "boutique",
+          "variety_store",
+          "mobile_phone",
+          "optician",
+          "stationery",
+          "craft",
+          "fabric",
+          "toys",
+          "sports",
+          "music",
+          "beauty",
+          "cosmetics"
+        ]
+      }
+    }
+  ],
+  "independent_categories": [
+    "coffee",
+    "convenience",
+    "hardware",
+    "books",
+    "pharmacy",
+    "small_retail"
+  ],
+  "notes": "独立性无法仅凭 OSM 完全验证；已知品牌及维基品牌标记按规则排除。无映射证据不计数。"
+}

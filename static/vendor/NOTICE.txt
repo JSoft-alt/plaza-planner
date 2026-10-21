@@ -1,0 +1,14 @@
+Locally distributed frontend assets, pinned in frontend/package-lock.json:
+
+MapLibre GL JS 5.24.0 — BSD-3-Clause
+https://github.com/maplibre/maplibre-gl-js
+See MAPLIBRE-LICENSE.txt, including bundled dependency notices.
+
+Terra Draw 1.38.0 — MIT
+Terra Draw MapLibre GL adapter 1.5.0 — MIT
+https://github.com/JamesLMilner/terra-draw
+See TERRA-DRAW-LICENSE.txt.
+
+Map tiles/style are not included in these files. The default public style is
+provided by OpenFreeMap, with OpenMapTiles and OpenStreetMap attribution
+displayed by MapLibre. https://openfreemap.org/
