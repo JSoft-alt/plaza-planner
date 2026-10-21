@@ -108,7 +108,7 @@ function searchFeedback(scan,now=Date.now()/1000,lastPollAt=null){
   const a=scan.activity??{},phaseAge=Math.max(0,Math.floor(now-(a.phase_started_at??scan.run_started_at??scan.created)));
   const completed=scan.progress?` · 已完成 ${scan.progress.done}/${scan.progress.total} 个区域`:'';
   let stage=scan.status==='queued'?'等待搜索任务开始':scan.message;
-  if(a.phase==='query')stage=`${a.attempt>1?'主服务未响应，正在尝试备用服务':'等待地图服务响应'} · ${a.provider??''}（第 ${a.attempt??1}/${a.attempts??1} 次请求）`;
+  if(a.phase==='query')stage=`${a.attempt>1?'主服务不可用，正在尝试备用服务':'等待地图服务响应'} · ${a.provider??''}（第 ${a.attempt??1}/${a.attempts??1} 次请求）`;
   if(a.phase==='download')stage=`接收地图数据 · ${Math.round((a.bytes??0)/1024)} KB`;
   if(a.phase==='cache')stage=`复用 ${Math.max(1,Math.ceil((a.age_seconds??0)/60))} 分钟内的地图缓存`;
   if(a.phase==='filter')stage=`处理 ${a.elements??0} 个地图要素，筛选商业区并去重`;

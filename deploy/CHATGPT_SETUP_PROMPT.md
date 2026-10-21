@@ -1,5 +1,7 @@
 # Copy everything below into ChatGPT or a deployment-capable coding agent
 
+Repository: https://github.com/JSoft-alt/plaza-planner (private). Use my authorized GitHub connection or the source ZIP I upload; do not ask me to paste an access token.
+
 Act as a senior Python/geospatial deployment engineer. Deploy the attached/referenced Plaza Planner repository using free, self-hosted components. Read `README.md`, `deploy/SETUP.md`, `compose.yaml` and `VERIFICATION.md` before editing. If you only have a normal ChatGPT conversation without machine access, provide executable steps for my own host; do not claim you can host an always-on server inside the chat. Ask only for the target host/OS and required routing region if unavailable. Inspect accessible host resources and existing services first. Do not request secret tokens/passwords in chat and do not create paid resources or subscriptions.
 
 Goal: A working Simplified Chinese planner, OSRM driving matrix service, and Python route optimizer, hosted on my own machine (or an existing suitable free server) and privately reachable from my phone via Tailscale HTTPS. This repository already implements the planner and batch logic. Preserve it, its SQLite history, and any unrelated or older plaza-console deployment. Do not replace existing Tailscale Serve routes or expose unauthenticated endpoints publicly.
