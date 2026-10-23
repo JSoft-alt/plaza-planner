@@ -32,7 +32,7 @@ import store
 BASE = Path(__file__).parent
 # Read local settings without copying any configuration from the old app.
 if (BASE / ".env").exists():
-    for line in (BASE / ".env").read_text().splitlines():
+    for line in (BASE / ".env").read_text(encoding="utf-8-sig").splitlines():
         if line.strip() and not line.lstrip().startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip("\"'"))

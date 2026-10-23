@@ -2,7 +2,11 @@ name: Checks
 on: workflow_dispatch # Optional manual CI; no automatic hosted runs.
 jobs:
   behavior:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,4 +19,8 @@ jobs:
       - run: python -m unittest discover -s tests -q
       - run: node --check static/app.js
       - run: node --test tests/test_map_geometry.cjs tests/test_native_share.cjs tests/test_search_feedback.cjs
-      - run: docker compose config --quiet
+      - if: runner.os == 'Linux'
+        run: docker compose config --quiet
+      - if: runner.os == 'Windows'
+        shell: powershell
+        run: ./tests/check-windows-launcher.ps1

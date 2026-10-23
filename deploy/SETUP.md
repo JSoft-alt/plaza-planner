@@ -11,6 +11,8 @@ All routing software runs on your CPU. No Google API key or paid routing/geocodi
 
 ## Docker Compose (Linux, Windows Docker Desktop, macOS Docker)
 
+Windows users: use [WINDOWS.md](WINDOWS.md) and `run-windows.cmd`. It also supports the free WSL2 + Ubuntu Docker Engine path without Docker Desktop. The launcher translates Windows paths, checks the local Linux engine, preserves the project/volume identity and waits for web readiness before opening the browser. The native Python alternative uses `run-native-windows.cmd` and requires an existing local OSRM service.
+
 Install Docker Engine + Compose on Linux, or a suitable Docker distribution on your own desktop. Use a folder with enough free storage and memory for the selected region. Start with a regional extract, not the planet. New York preparation previously used several GB of RAM; allow headroom (e.g. 16 GB available RAM), and measure your selected extract. This is not a guaranteed resource bound.
 
 From this repository's root:

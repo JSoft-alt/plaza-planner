@@ -105,7 +105,7 @@ class Manager:
                     if engine['process'].poll() is None and region and shape(region['geometry']).covers(wanted):
                         self.jobs[key]=dict(job_id=key,phase='ready',message=PHASES['ready'],endpoint=endpoint,
                                             region=engine['region'],started_at=time.time(),updated_at=time.time(),
-                                            road_data=json.loads((engine['directory']/'ready.json').read_text()))
+                                            road_data=json.loads((engine['directory']/'ready.json').read_text(encoding='utf-8')))
                         return dict(self.jobs[key])
                 base_region=os.environ.get('OSRM_BASE_REGION','')
                 region=next((f for f in self.catalog['features'] if f['properties']['id']==base_region),None)
@@ -147,7 +147,7 @@ class Manager:
         cached = None
         if path.exists():
             try:
-                cached=json.loads(path.read_text())
+                cached=json.loads(path.read_text(encoding='utf-8'))
                 if time.time()-path.stat().st_mtime<30*86400:
                     self.catalog=cached
                     return cached
@@ -320,7 +320,7 @@ class Manager:
                 self.command(key,['osrm-customize','--threads','2','map.osrm'],'customize',directory)
                 store.atomic_json(manifest,dict(region_id=region['id'],source=region['urls']['pbf'],version=version,prepared_at=time.time()))
             endpoint=self.start_engine(key,directory,region['id'])
-            self.update(key,phase='ready',endpoint=endpoint,region=region.get('name') or region['id'],road_data=json.loads(manifest.read_text()))
+            self.update(key,phase='ready',endpoint=endpoint,region=region.get('name') or region['id'],road_data=json.loads(manifest.read_text(encoding='utf-8')))
         except Exception as exc:
             import logging
             logging.getLogger(__name__).exception('Regional OSRM preparation failed')

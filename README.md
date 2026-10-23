@@ -23,12 +23,14 @@ cd '/Users/jasonxu/Documents/CODING PROJECTS/plaza-planner'
 ./run.sh
 ```
 
-访问 <http://127.0.0.1:8011>。本次交付已建立独立 `.venv` 并安装依赖，前端地图库已随应用提供。其他机器首次运行脚本会创建环境并安装 `requirements.txt`。Windows：
+访问 <http://127.0.0.1:8011>。本次交付已建立独立 `.venv` 并安装依赖，前端地图库已随应用提供。其他机器首次运行脚本会创建环境并安装 `requirements.txt`。
+
+**Windows：**解压 Windows ZIP，准备本机 WSL2 + Ubuntu Docker Engine（无需 Docker Desktop 订阅；已有 Docker Desktop Linux 后端也可用），双击 `run-windows.cmd`。完整步骤和原生 Python 选项见 [deploy/WINDOWS.md](deploy/WINDOWS.md)。自动下载路网、OSRM 矩阵和路线计算都在这台 Windows 电脑上执行。
 
 ```powershell
-py -3 -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8011 --workers 1
+.\run-windows.cmd
+# 停止并保留历史：
+.\run-windows.cmd -Action stop
 ```
 
 只运行一个实例 / 一个 worker。文件锁阻止两个进程同时使用同一数据目录；同一进程最多执行两个发现任务、一项路线优化。进程运行时，内置 APScheduler 每 15 秒检查计划。关闭浏览器不会停止计划，关闭应用进程会停止计划。需要全天运行时，在本机系统服务中启动同一个命令。

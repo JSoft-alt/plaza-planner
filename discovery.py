@@ -216,7 +216,7 @@ def fetch_tile(bounds, on_activity=None, cancelled=None, discovery_kind="retail"
     cache_file = store.DATA / "tile-cache" / (cache_key + ".json")
     if cache_file.exists():
         try:
-            cached = json.loads(cache_file.read_text())
+            cached = json.loads(cache_file.read_text(encoding="utf-8"))
             age = time.time() - cached["fetched_at"]
             if 0 <= age < 900 and isinstance(cached.get("elements"), list):
                 activity(phase="cache", provider="本地缓存", age_seconds=round(age), elements=len(cached["elements"]))
@@ -285,7 +285,7 @@ def run_scan(sid):
         rules = scan.get("qualification_rules") or json.loads((OFFICE_RULES if config.discovery_kind == "offices" else RULES).read_text(encoding="utf-8"))
         store.update_scan(sid, qualification_rules=rules)
         checkpoint = store.DATA / "checkpoints" / f"{sid}.json"
-        cached = json.loads(checkpoint.read_text()) if checkpoint.exists() else {"elements": {}, "done": []}
+        cached = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.exists() else {"elements": {}, "done": []}
         work = tiles(config)
         # Old scans used a grid anchored on the origin. Keep their recoverable
         # evidence, but re-fetch the new task plan instead of misreading indexes.
