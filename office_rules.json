@@ -1,0 +1,11 @@
+{
+  "excluded_names_or_brands": [],
+  "excluded_shops": [],
+  "excluded_amenities": [],
+  "categories": [
+    {"id": "hospital", "tags": {"amenity": ["hospital"], "healthcare": ["hospital"]}},
+    {"id": "dental", "tags": {"amenity": ["dentist"], "healthcare": ["dentist"]}},
+    {"id": "medical", "tags": {"amenity": ["doctors", "clinic"], "healthcare": ["doctor", "doctors", "clinic", "physiotherapist", "psychotherapist", "psychologist", "podiatrist", "midwife", "rehabilitation", "laboratory", "alternative", "optometrist", "audiologist"]}},
+    {"id": "company", "nonempty_tags": {"office": ["no", "vacant", "disused", "construction"]}}
+  ]
+}

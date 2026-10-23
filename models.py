@@ -39,10 +39,12 @@ class Origin(BaseModel):
 class SearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     origin: Origin
+    discovery_kind: Literal["retail", "offices"] = "retail"
     mode: Literal["circle", "polygon"] = "circle"
     diameter_miles: float = Field(default=10, ge=.1, le=30)
     polygon: list[tuple[float, float]] = Field(default_factory=list, max_length=100)
     min_shops: int = Field(default=3, ge=1, le=100, strict=True)
+    min_companies: int = Field(default=3, ge=1, le=100, strict=True)
     batch_size: int = Field(default=5, ge=1, le=MAX_STOPS, strict=True)
     baseline: float = Field(default=0, ge=0, lt=360)
 

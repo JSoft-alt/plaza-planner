@@ -29,6 +29,14 @@ plazas = [dict(id=f"way:{i}",name=name,address="测试街道 123 号",lat=40.758
 store.update_scan(record["id"],status="complete",plazas=plazas,message="界面测试数据")
 
 
+# Office mode shares the same durable queue/routing contract; UI-only examples.
+office_config=config.model_copy(update=dict(discovery_kind='offices',min_companies=3))
+office_record=store.insert_scan(office_config.model_dump(mode='json'))
+office_names=['牙科与律师办公楼（测试）','公司办公园区（测试）','医院与医疗中心（测试）']
+office_plazas=[p | dict(name=office_names[(i-1)%3],company_count=3+i,entity_kind='office_zone' if i%3==2 else 'building') for i,p in enumerate(plazas[:10],1)]
+store.update_scan(office_record['id'],status='complete',plazas=office_plazas,message='办公 / 医疗界面测试数据')
+
+
 def fake_osrm(service, points, **params):
     n=len(points)
     if service=="table":

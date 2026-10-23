@@ -19,6 +19,7 @@ from models import SearchInput, sweep
 import store
 
 RULES = Path(__file__).with_name("retail_rules.json")
+OFFICE_RULES = Path(__file__).with_name("office_rules.json")
 DEFAULT_OVERPASS = "https://overpass.private.coffee/api/interpreter"
 DEFAULT_FALLBACK = "https://overpass-api.de/api/interpreter"
 OVERPASS = os.environ.get("OVERPASS_URL", DEFAULT_OVERPASS)
@@ -41,6 +42,8 @@ def category(tags, rules):
         matches = any(set(tags.get(key, "").lower().split(";")) & set(values) for key, values in item.get("tags", {}).items())
         matches |= any(re.search(r"(?<!\w)" + re.escape(normalized(word)) + r"(?!\w)", name) is not None
                        for word in item.get("name_words", []))
+        matches |= any(tags.get(key, "").strip().lower() not in excluded and bool(tags.get(key, "").strip())
+                       for key, excluded in item.get("nonempty_tags", {}).items())
         if matches:
             if item["id"] in rules.get("independent_categories", []) and any(tags.get(k) for k in ("brand", "brand:wikidata", "operator:wikidata")):
                 continue
@@ -77,7 +80,8 @@ def address(tags):
 
 
 def qualify(elements, config, rules=None):
-    rules = rules or json.loads(RULES.read_text(encoding="utf-8"))
+    offices = config.discovery_kind == "offices"
+    rules = rules or json.loads((OFFICE_RULES if offices else RULES).read_text(encoding="utf-8"))
     rules_hash = hashlib.sha256(store.dump(rules).encode()).hexdigest()
     area, forward, inverse = config.area()
     shops, outlines = [], []
@@ -94,41 +98,58 @@ def qualify(elements, config, rules=None):
         if kind:
             shops.append(dict(id=pid, tags=tags, category=kind, point=metric.representative_point(), geometry=metric))
         is_mall = tags.get("shop") == "mall" or tags.get("building") in ("shopping_centre", "shopping_center")
-        if metric.geom_type in ("Polygon", "MultiPolygon") and (is_mall or tags.get("landuse") == "retail" or tags.get("building") == "retail"):
+        office_outline = tags.get("building", "no") not in ("no", "roof", "construction", "ruins") or tags.get("landuse") == "commercial" or bool(kind)
+        if metric.geom_type in ("Polygon", "MultiPolygon") and (office_outline if offices else (is_mall or tags.get("landuse") == "retail" or tags.get("building") == "retail")):
             point = metric.representative_point()
             if area.covers(point):
-                priority = 0 if is_mall else 1 if tags.get("landuse") == "retail" else 2
+                priority = (2 if tags.get("landuse") == "commercial" else 0 if tags.get("building") else 1) if offices else (0 if is_mall else 1 if tags.get("landuse") == "retail" else 2)
                 outlines.append(dict(id=pid, tags=tags, geometry=metric, point=point, priority=priority))
     # Nodes and building footprints often describe the same storefront. Use a
     # spatial index; matching name OR containment of an unnamed feature is needed.
     shops.sort(key=lambda s: (not bool(s["tags"].get("name")), s["id"]))
-    tree = STRtree([s["point"] for s in shops])
+    tree = STRtree([s["geometry"] if offices else s["point"] for s in shops])
     duplicate = set()
     for i, shop in enumerate(shops):
         if i in duplicate:
             continue
-        for j in tree.query(shop["point"].buffer(15)):
+        for j in tree.query((shop["geometry"] if offices else shop["point"]).buffer(15)):
             j = int(j)
             if j <= i or j in duplicate:
                 continue
             other = shops[j]
             same_name = normalized(shop["tags"].get("name", "")) == normalized(other["tags"].get("name", ""))
             unnamed_overlap = (not other["tags"].get("name") or not shop["tags"].get("name")) and shop["geometry"].intersects(other["geometry"])
-            if shop["category"] == other["category"] and shop["point"].distance(other["point"]) <= 15 and (same_name or unnamed_overlap):
+            if offices:
+                # Never merge distinct tenants merely because they share a category,
+                # address, operator or building. Match duplicated POI/footprint names.
+                identity = same_name and bool(normalized(shop["tags"].get("name", "")))
+                same_unit = all(not (shop["tags"].get(k) and other["tags"].get(k)) or shop["tags"][k] == other["tags"][k]
+                                for k in ("addr:unit", "level"))
+                duplicate_company = identity and same_unit and shop["geometry"].distance(other["geometry"]) <= 15
+            else:
+                duplicate_company = shop["category"] == other["category"] and shop["point"].distance(other["point"]) <= 15 and (same_name or unnamed_overlap)
+            if duplicate_company:
                 duplicate.add(j)
     shops = [s for i, s in enumerate(shops) if i not in duplicate]
     tree = STRtree([s["point"] for s in shops])
     candidates = []
     for outline in outlines:
-        inside = [shops[int(i)] for i in tree.query(outline["geometry"]) if shops[int(i)]["id"] != outline["id"]
+        inside = [shops[int(i)] for i in tree.query(outline["geometry"]) if (offices or shops[int(i)]["id"] != outline["id"])
                   and outline["geometry"].covers(shops[int(i)]["point"])]
-        if len(inside) >= config.min_shops:
+        if len(inside) >= (config.min_companies if offices else config.min_shops):
             candidates.append(outline | {"shops": inside, "ids": {s["id"] for s in inside}})
+    if offices and config.min_companies == 1:
+        # A mapped standalone practice/hospital is useful even without a building
+        # footprint. It is one organization, never a fabricated nearby cluster.
+        outline_tree = STRtree([o["geometry"] for o in outlines])
+        for company in shops:
+            if area.covers(company["point"]) and not any(outlines[int(i)]["geometry"].covers(company["point"]) for i in outline_tree.query(company["point"])):
+                candidates.append(company | dict(priority=3, shops=[company], ids={company["id"]}))
     candidates.sort(key=lambda c: (c["priority"], -len(c["ids"]), -c["geometry"].area, c["id"]))
     kept = []
     for candidate in candidates:
         if any(len(candidate["ids"] & old["ids"]) / min(len(candidate["ids"]), len(old["ids"])) >= .8
-               or candidate["geometry"].intersection(old["geometry"]).area / min(candidate["geometry"].area, old["geometry"].area) >= .8
+               or (min(candidate["geometry"].area, old["geometry"].area) > 0 and candidate["geometry"].intersection(old["geometry"]).area / min(candidate["geometry"].area, old["geometry"].area) >= .8)
                for old in kept):
             continue
         kept.append(candidate)
@@ -142,11 +163,13 @@ def qualify(elements, config, rules=None):
             streets = {s["tags"].get("addr:street") for s in item["shops"]} - {None, ""}
             if len(streets) == 1:
                 plaza_address = next(iter(streets))
-        plazas.append(dict(id=item["id"], name=name or "未命名商业区", address=plaza_address or "地址未映射",
-                           lat=lat, lng=lng, shop_count=len(item["shops"]),
+        entity_kind = ("office_zone" if item["tags"].get("landuse") == "commercial" else "building" if item["tags"].get("building") else "facility") if offices else "retail"
+        fallback_name = {"office_zone": "未命名办公区", "building": "未命名办公 / 医疗楼", "facility": "未命名机构", "retail": "未命名商业区"}[entity_kind]
+        plazas.append(dict(id=item["id"], name=name or fallback_name, address=plaza_address or "地址未映射",
+                           lat=lat, lng=lng, **({"company_count": len(item["shops"]), "entity_kind": entity_kind} if offices else {"shop_count": len(item["shops"])}),
                            provenance={"source": "OpenStreetMap", "outline": item["id"],
                                        "eligible_ids": sorted(item["ids"]), "rules_hash": rules_hash,
-                                       "destination": "商业区边界内点；并非已验证入口"}))
+                                       "destination": "已映射机构位置或边界内点；并非已验证入口" if offices else "商业区边界内点；并非已验证入口"}))
     return sweep(plazas, config)
 
 
@@ -170,7 +193,7 @@ def tiles(config):
     return result
 
 
-def fetch_tile(bounds, on_activity=None, cancelled=None):
+def fetch_tile(bounds, on_activity=None, cancelled=None, discovery_kind="retail"):
     global _blocked_until
     def activity(**event):
         if on_activity:
@@ -185,6 +208,9 @@ def fetch_tile(bounds, on_activity=None, cancelled=None):
     selectors = ['["shop"]', '["building"~"^(retail|shopping_centre|shopping_center)$"]',
                  '["landuse"="retail"]', '["amenity"~"^(restaurant|cafe|fast_food|pharmacy|car_wash)$"]',
                  '["sport"]', '["healthcare"="acupuncture"]']
+    if discovery_kind == "offices":
+        selectors = ['["office"]', '["healthcare"]', '["amenity"~"^(hospital|clinic|dentist|doctors)$"]',
+                     '["building"]["building"!="no"]', '["landuse"="commercial"]']
     query = '[out:json][timeout:20][maxsize:33554432];(' + "".join(f"nwr{sel}({bbox});" for sel in selectors) + ');out geom;'
     cache_key = hashlib.sha256((OVERPASS + query).encode()).hexdigest()
     cache_file = store.DATA / "tile-cache" / (cache_key + ".json")
@@ -256,7 +282,7 @@ def run_scan(sid):
     try:
         scan = store.get_scan(sid)
         config = SearchInput.model_validate(scan["config"])
-        rules = scan.get("qualification_rules") or json.loads(RULES.read_text(encoding="utf-8"))
+        rules = scan.get("qualification_rules") or json.loads((OFFICE_RULES if config.discovery_kind == "offices" else RULES).read_text(encoding="utf-8"))
         store.update_scan(sid, qualification_rules=rules)
         checkpoint = store.DATA / "checkpoints" / f"{sid}.json"
         cached = json.loads(checkpoint.read_text()) if checkpoint.exists() else {"elements": {}, "done": []}
@@ -284,14 +310,14 @@ def run_scan(sid):
             if time.monotonic() - started > 600:
                 raise ValueError("本次搜索已达 10 分钟，请重试以继续剩余区域。")
             store.update_scan(sid, message=f"读取区域 {len(cached['done']) + 1} / {len(work)}")
-            for element in fetch_tile(bounds, on_activity=report, cancelled=lambda: store.get_scan(sid)["cancel"]):
+            for element in fetch_tile(bounds, on_activity=report, cancelled=lambda: store.get_scan(sid)["cancel"], discovery_kind=config.discovery_kind):
                 cached["elements"][f"{element['type']}:{element['id']}"] = element
             if len(cached["elements"]) > 100000:
                 raise ValueError("区域包含过多地图要素，请缩小范围。")
             cached["done"].append(index)
             store.atomic_json(checkpoint, cached)
             report(phase="filter", elements=len(cached["elements"]))
-            store.update_scan(sid, message="核对商业区与去重", progress=None)
+            store.update_scan(sid, message="核对办公 / 医疗机构与去重" if config.discovery_kind == "offices" else "核对商业区与去重", progress=None)
             plazas = qualify(cached["elements"].values(), config, rules)
             store.update_scan(sid, plazas=plazas, completed_tiles=cached["done"],
                               progress={"done": len(cached["done"]), "total": len(work)})

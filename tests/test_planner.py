@@ -167,6 +167,31 @@ class Application(unittest.TestCase):
             files=list((store.DATA/'exports').glob('*.json'));self.assertTrue(files)
             self.assertEqual(json.loads(self.client.get(f'/api/scans/{sid}/export').content)['id'],sid)
 
+    def test_office_search_persists_kind_threshold_and_schedule(self):
+        from test_offices import fixture as office_fixture
+        c=config(discovery_kind='offices',min_companies=3,diameter_miles=1)
+        rec=store.insert_scan(c.model_dump(mode='json'))
+        with patch.object(discovery,'fetch_tile',return_value=office_fixture()) as fetch:
+            discovery.run_scan(rec['id'])
+        saved=self.client.get(f"/api/scans/{rec['id']}").json()
+        self.assertEqual(saved['status'],'complete',saved['message'])
+        self.assertEqual(saved['config']['discovery_kind'],'offices')
+        self.assertEqual(saved['config']['min_companies'],3)
+        self.assertEqual(saved['plazas'][0]['company_count'],4)
+        self.assertEqual(fetch.call_args.kwargs['discovery_kind'],'offices')
+        self.assertEqual(saved['qualification_rules']['categories'][0]['id'],'hospital')
+        trip=store.new_trip(rec['id'])
+        self.assertEqual(store.get_scan(rec['id'])['trips'][0]['start']['lat'],c.origin.lat)
+        export=self.client.get(f"/api/scans/{rec['id']}/export").json()
+        self.assertEqual(export['config']['discovery_kind'],'offices')
+        history=self.client.get('/api/history').json()['items']
+        self.assertTrue(any(r['id']==rec['id'] and r['config']['min_companies']==3 for r in history))
+        response=self.client.post('/api/schedules',json=dict(name='Offices',config=c.model_dump(mode='json'),cron='0 9 * * *',timezone='America/New_York',enabled=False),headers=self.headers)
+        self.assertEqual(response.status_code,200,response.text)
+        saved_schedule=next(s for s in self.client.get('/api/schedules').json()['items'] if s['id']==response.json()['id'])
+        self.assertEqual(saved_schedule['config']['discovery_kind'],'offices')
+        self.assertEqual(saved_schedule['config']['min_companies'],3)
+
     def test_duplicate_batches_refresh_and_final_short_trip(self):
         sid=self.make_scan()
         with ThreadPoolExecutor(max_workers=4) as executor:

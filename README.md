@@ -1,6 +1,18 @@
-# 巡访 · 本地商业区行程规划
+# 巡访 · 本地地点行程规划
 
 独立的 FastAPI + 原生 HTML/CSS/JavaScript 应用，SQLite 持久化。没有修改或依赖旧的 `plaza-console` 服务、数据或配置。不需要 Node、GPU、云服务器或付费路线服务。
+
+## 商店与医院 / 办公楼
+
+规划页有“商店与商业区”和“医院与办公楼”两个入口。后者包含医院、诊所、牙科、律师事务所及其他 `office=*` 公司 / 机构，使用 `office_rules.json`。按**每栋已映射楼宇或办公区边界内的不同公司 / 医疗机构数**筛选和显示数量，不把相邻 POI 按距离拼成簇；只有楼的名称、层数或 `building=office` 不会生成虚构租户。重复节点 / 轮廓去重，明确不同楼层或单元保留。公司数据缺失时不能推断完整租户数。独立医院 / 诊所计 1 家，最少公司数设为 1 才能纳入；没有楼宇轮廓的独立机构使用自己的已映射位置。
+
+两种类型共用起点、画区 / 直径、扫掠队列、接续分趟、路线、地点分享、Google 预览、历史、JSON 导出和定时搜索。搜索保存 `discovery_kind`、`min_companies` 和规则快照；旧记录没有新字段时仍按零售模式打开。医院 / 办公楼结果使用 `company_count`，不会误用零售 `shop_count`。原有零售规则不变。依据：[OSM office](https://wiki.openstreetmap.org/wiki/Key:office)、[OSM healthcare](https://wiki.openstreetmap.org/wiki/Key:healthcare)。
+
+## 哪些工作在本机执行
+
+取得地点数据后，几何筛选、公司 / 小店计数、去重、方位排序、OSRM 道路时间矩阵、Python Held–Karp / OR-Tools 路线优化、历史和计划均在运行此应用的电脑上执行。默认 OSRM 地址为本机 `127.0.0.1:5001`；新区域图的下载、预处理和新 OSRM 子进程也在本机。无需把矩阵再交给 OSMnx，OSRM 直接提供真实道路的驾驶时间矩阵。没有付费矩阵或云端路线优化服务。
+
+这不等于完全离线：默认 Overpass 向 OpenStreetMap 数据服务查询搜索范围，Census / Nominatim 按主动操作查地址，Geofabrik 下载路网，地图底图与 Google iframe 在线加载。Google 预览会按相同站点顺序独立重算自己的路线，不参与应用保存的 OSRM 优化结果。要完全离线搜索地点，还需本机 OSM 查询服务，并将 `OVERPASS_URL` 指向它；已经下载路网不等于拥有本机 POI 查询库。默认本机部署没有把此类服务安装到公网。
 
 ## 运行
 

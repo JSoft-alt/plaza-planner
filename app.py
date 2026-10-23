@@ -73,7 +73,7 @@ def run(sid, schedule_id=None):
         if schedule_id:
             try:
                 scan = store.get_scan(sid)
-                outcome = (f"完成 · {len(scan['plazas'])} 个商业区" if scan["status"] == "complete" else scan["message"])
+                outcome = (f"完成 · {len(scan['plazas'])} 个地点" if scan["status"] == "complete" else scan["message"])
                 with store.db() as conn:
                     conn.execute("UPDATE schedules SET running=NULL,last_outcome=? WHERE id=? AND running=?",
                                  (outcome, schedule_id, sid))
@@ -137,7 +137,7 @@ async def lifespan(app):
     lockfile.close()
 
 
-app = FastAPI(title="巡访 · 商业区行程规划", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="巡访 · 地点行程规划", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 
 
@@ -174,7 +174,8 @@ async def invalid(request, exc):
 @app.exception_handler(RequestValidationError)
 async def validation(request, exc):
     labels = {"origin": "请先确认起点。", "diameter_miles": "直径须为 0.1–30 英里。",
-              "min_shops": "最少小店数须为 1–100 的整数。", "batch_size": "每趟地点数须为 1–15 的整数。",
+              "min_shops": "最少小店数须为 1–100 的整数。", "min_companies": "最少公司数须为 1–100 的整数。",
+              "discovery_kind": "请选择商店或办公 / 医疗类型。", "batch_size": "每趟地点数须为 1–15 的整数。",
               "baseline": "起始角须为 0–359.99 度。", "polygon": "请绘制有效边界，最多 100 个顶点。",
               "timezone": "请填写有效时区。", "cron": "请填写有效的五段 cron 表达式。"}
     errors = {}
@@ -360,7 +361,7 @@ def share(sid: str, pid: str):
     rec = store.get_scan(sid)
     plaza = next((p for p in rec["plazas"] if p["id"] == pid), None)
     if not plaza:
-        raise KeyError("找不到这个商业区。")
+        raise KeyError("找不到这个地点。")
     try:
         return {"url": sharing.short_link(plaza), "kind": "short", "message": "Google 短链接已验证"}
     except ValueError:

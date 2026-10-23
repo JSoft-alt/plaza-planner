@@ -894,3 +894,8 @@
 .place-preview-button:hover{background:transparent;border:0;color:#245da2}
 .coverage-status{font-size:13px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
 @media(max-width:600px){.google-preview iframe{height:340px}.google-preview>.row{padding:14px}.google-preview>p{padding:0 14px 14px}}
+
+.discovery-tabs{display:flex;gap:6px;margin:0 0 24px;border-bottom:1px solid var(--line);padding-bottom:12px;flex-wrap:wrap}
+.discovery-tabs button{background:transparent;border-color:transparent;min-height:46px;padding:10px 20px;color:var(--muted)}
+.discovery-tabs button[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:#fff}
+@media(max-width:560px){.discovery-tabs{gap:4px;margin-bottom:18px}.discovery-tabs button{flex:1;padding:10px 12px}}
