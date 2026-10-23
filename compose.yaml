@@ -11,6 +11,7 @@ services:
     entrypoint: [/bin/sh, /prepare-osrm.sh]
   osrm:
     <<: *osrm
+    profiles: [manual]
     command: [osrm-routed, --algorithm, mld, --max-table-size, '100', /data/map.osrm]
     volumes:
       - ./osrm-data:/data:ro
@@ -19,13 +20,16 @@ services:
   planner:
     build: .
     environment:
-      OSRM_URL: http://osrm:5000
+      OSRM_URL: ${OSRM_URL:-http://127.0.0.1:5001}
+      OSRM_AUTO_DOWNLOAD: ${OSRM_AUTO_DOWNLOAD:-1}
+      OSRM_MAX_EXTRACT_MB: ${OSRM_MAX_EXTRACT_MB:-2048}
+      OSRM_BASE_REGION: ${OSRM_BASE_REGION:-}
+      GOOGLE_MAPS_EMBED_KEY: ${GOOGLE_MAPS_EMBED_KEY:-}
       PLANNER_DATA_DIR: /app/data
     volumes:
       - planner-data:/app/data
     ports:
       - '127.0.0.1:8011:8011'
-    depends_on: [osrm]
     restart: unless-stopped
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/api/bootstrap', timeout=3)"]

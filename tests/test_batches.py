@@ -1,11 +1,13 @@
 """Chained membership, fixed endpoints, link limits and real optimizer inputs."""
 from pathlib import Path
 import tempfile
+import os
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
+os.environ['OSRM_AUTO_DOWNLOAD']='0'
 import app
 from models import SearchInput
 import routing

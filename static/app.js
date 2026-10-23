@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const state = {origin:null, polygon:[], scan:null, tripId:null, selected:new Set(), busy:false,
   bootstrap:null, map:null, overlays:[], draft:null, mapPurpose:'area', drawing:false, moving:false,
-  historyOffset:0, scheduleId:null, scheduleConfig:null};
+  historyOffset:0, scheduleId:null, scheduleConfig:null, embedData:null, embedKey:null, googleChoice:null};
 let pollTimer, toastTimer, mapPromise, confirmAction, focusBeforeMap;
 let locationRequest = 0;
 const coordinateLabel = (lat, lng) => `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
@@ -36,7 +36,7 @@ function syncForm(){
   $('originSummary').hidden=!c.origin?.confirmed;$('originSummary').textContent=c.origin?`已确认：${c.origin.label}`:'';
   if(c.mode==='polygon'&&c.origin&&c.polygon.length>=3&&!mapGeometry.covers(c.polygon,c.origin.lng,c.origin.lat))$('error-polygon').textContent='起点必须位于绘制区域内或边界上，请移动起点或修改边界。';
   else if($('error-polygon').textContent.startsWith('起点必须'))$('error-polygon').textContent='';
-  $('search').disabled=!canSearch();persist();
+  $('search').disabled=!canSearch();persist();queueOriginRoadData();
 }
 function validateNumberInput(id){
   const fields={diameter:['diameter_miles','直径须为 0.1–30 英里。'],minShops:['min_shops','请输入 1–100 的整数。'],batchSize:['batch_size','每趟须为 1–15 个商业区。'],baseline:['baseline','起始角须为 0–359.99 度。']};
@@ -84,7 +84,7 @@ function publicLookup(input, target, onChoose) {
   target.append(note, button);
 }
 
-function newSearch(){clearTimeout(pollTimer);state.scan=null;state.tripId=null;state.selected.clear();state.busy=false;$('empty').hidden=false;$('scanResults').hidden=true;syncForm();view('planner');}
+function newSearch(){state.routeToken=null;state.embedData=null;state.embedKey=null;state.googleChoice=null;$('googlePreview').hidden=true;clearTimeout(pollTimer);state.scan=null;state.tripId=null;state.selected.clear();state.busy=false;$('empty').hidden=false;$('scanResults').hidden=true;syncForm();view('planner');}
 async function view(name){
   document.querySelectorAll('.view').forEach(el=>el.hidden=el.id!==name);
   document.querySelectorAll('.nav').forEach(el=>{el.classList.toggle('active',el.dataset.view===name);el.setAttribute('aria-current',el.dataset.view===name?'page':'false');});
@@ -97,7 +97,7 @@ async function poll(){
   }catch(error){toast(error.message);pollTimer=setTimeout(poll,5000);}
 }
 async function reopen(id){
-  clearTimeout(pollTimer);const rec=await api('/scans/'+id);state.scan=rec;state.selected.clear();
+  state.routeToken=null;state.busy=false;clearTimeout(pollTimer);const rec=await api('/scans/'+id);state.scan=rec;state.selected.clear();
   if(!rec.trips.some(t=>t.id===state.tripId))state.tripId=rec.trips.at(-1)?.id??null;
   restoreConfig(rec.config);renderResults();view('planner');persist();
   if(['queued','running'].includes(rec.status))poll();
@@ -134,7 +134,7 @@ function renderResults(){
   $('resultCount').textContent=s.plazas.length;$('scanLabel').textContent=`${s.config.origin.label} · ${boundaryText(s.config)} · ${dateText(s.created)}${s.elapsed_seconds!=null?` · 耗时 ${Math.round(s.elapsed_seconds)} 秒`:''}`;
   $('tripSelect').innerHTML=s.trips.length?s.trips.map(t=>`<option value="${t.id}">第 ${t.number} 趟 · ${t.plaza_ids.length} 个地点${t.route?' · 已计算':''}</option>`).join(''):'<option value="">尚未分趟</option>';
   if(!s.trips.some(t=>t.id===state.tripId))state.tripId=s.trips.at(-1)?.id??null;
-  $('tripSelect').value=state.tripId??'';
+  $('tripSelect').value=state.tripId??'';$('tripSelect').disabled=state.busy;
   const assigned=new Set(s.trips.flatMap(t=>t.plaza_ids));
   const unfinished=s.trips.at(-1)&&(!s.trips.at(-1).route||(s.trips.at(-1).number>1&&!s.trips.at(-1).route.start));
   $('nextTrip').disabled=state.busy||s.status!=='complete'||(assigned.size===s.plazas.length&&!unfinished);
@@ -155,18 +155,21 @@ function renderResults(){
   const times=Object.assign({},...s.trips.filter(t=>t.route).map(t=>Object.fromEntries(Object.entries(t.route.origin_seconds??{}).map(([id,seconds])=>[id,{seconds,number:t.number}]))));
   for(const p of s.plazas){
     const li=document.createElement('li');li.className='plaza'+(t?.plaza_ids.includes(p.id)?' current':'');
-    li.innerHTML=`<input type="checkbox" aria-label="在地图中选中 ${escapeHtml(p.name)}" ${state.selected.has(p.id)?'checked':''}><span class="rank">${p.rank}</span><div><h3>${escapeHtml(p.name)}</h3><p>${escapeHtml(p.address)}</p><p class="distance">${p.distance_miles.toFixed(1)} 英里${times[p.id]!=null?` · 第 ${times[p.id].number} 趟起点驾车约 ${Math.ceil(times[p.id].seconds/60)} 分钟`:''}</p></div><button class="icon-button">${icon('share')}分享</button>`;
+    li.innerHTML=`<input type="checkbox" aria-label="在地图中选中 ${escapeHtml(p.name)}" ${state.selected.has(p.id)?'checked':''}><span class="rank">${p.rank}</span><div><h3><button class="place-preview-button" data-place-preview="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></h3><p>${escapeHtml(p.address)}</p><p class="distance">${p.distance_miles.toFixed(1)} 英里${times[p.id]!=null?` · 第 ${times[p.id].number} 趟起点驾车约 ${Math.ceil(times[p.id].seconds/60)} 分钟`:''}</p></div><button class="icon-button">${icon('share')}分享</button>`;
     li.querySelector('input').onchange=e=>{e.target.checked?state.selected.add(p.id):state.selected.delete(p.id);$('previewSelection').disabled=!state.selected.size;};
-    li.querySelector('button').onclick=event=>sharePlaza(p,event.currentTarget);
+    li.querySelector('[data-place-preview]').onclick=()=>selectGooglePlace(p.id);
+    li.querySelector('.icon-button').onclick=event=>sharePlaza(p,event.currentTarget);
     $('plazaList').append(li);
   }
-  $('previewSelection').disabled=!state.selected.size;$('zeroResults').hidden=active||s.plazas.length>0;syncForm();
+  $('previewSelection').disabled=!state.selected.size;$('zeroResults').hidden=active||s.plazas.length>0;syncForm();loadEmbeds();loadCoverageStatus();
 }
 function renderRoute(trip,start){
   const r=trip.route, byId=Object.fromEntries(state.scan.plazas.map(p=>[p.id,p]));
   const startName=start.name??start.label??coordinateLabel(start.lat,start.lng);
-  $('routeSummary').innerHTML=`<div class="route-result"><strong>${Math.ceil(r.duration_seconds/60)} 分钟 <small>· ${(r.distance_meters/1609.344).toFixed(1)} 英里</small></strong><p>${escapeHtml(r.method)} · ${r.return_to_origin?'最后返回本趟起点':'在最后一个新地点结束'}</p><div class="route-start"><span class="stop-number start-number">起</span><div><strong>${escapeHtml(startName)}</strong><small>${start.previous_trip_number?`第 ${start.previous_trip_number} 趟终点，不占新地点名额`:'本趟固定起点'} · ${coordinateLabel(start.lat,start.lng)}</small></div>${start.id?`<button class="icon-button" data-share="${escapeHtml(start.id)}">${icon('share')}分享</button>`:''}</div><ol class="route-stops">${r.order.map((id,i)=>`<li><span class="stop-number">${i+1}</span><div><strong>${escapeHtml(byId[id].name)}</strong><small>${escapeHtml(byId[id].address)}</small><small>本段 ${Math.ceil(r.legs_seconds[i]/60)} 分钟 · 队列 #${byId[id].rank}</small></div><button class="icon-button" data-share="${escapeHtml(id)}">${icon('share')}分享</button></li>`).join('')}${r.return_to_origin?`<li><span class="stop-number start-number">返</span><div><strong>返回本趟起点</strong><small>本段 ${Math.ceil(r.legs_seconds.at(-1)/60)} 分钟；下一趟从这里接续</small></div></li>`:''}</ol><div class="route-actions"><button id="openGoogleRoute" class="primary icon-button">${icon('route')}在 Google Maps 中打开</button><button id="previewRoute" class="icon-button">${icon('map')}地图预览</button></div><p>${escapeHtml(r.note)}</p></div>`;
-  $('previewRoute').onclick=()=>openMap('route');
+  $('routeSummary').innerHTML=`<div class="route-result"><strong>${Math.ceil(r.duration_seconds/60)} 分钟 <small>· ${(r.distance_meters/1609.344).toFixed(1)} 英里</small></strong><p>${escapeHtml(r.method)} · ${r.return_to_origin?'最后返回本趟起点':'在最后一个新地点结束'}</p><div class="route-start"><span class="stop-number start-number">起</span><div><strong>${escapeHtml(startName)}</strong><small>${start.previous_trip_number?`第 ${start.previous_trip_number} 趟终点，不占新地点名额`:'本趟固定起点'} · ${coordinateLabel(start.lat,start.lng)}</small></div>${start.id?`<button class="icon-button" data-share="${escapeHtml(start.id)}">${icon('share')}分享</button>`:''}</div><ol class="route-stops">${r.order.map((id,i)=>`<li><span class="stop-number">${i+1}</span><div><strong><button class="place-preview-button" data-place-preview="${escapeHtml(id)}">${escapeHtml(byId[id].name)}</button></strong><small>${escapeHtml(byId[id].address)}</small><small>本段 ${Math.ceil(r.legs_seconds[i]/60)} 分钟 · 队列 #${byId[id].rank}</small></div><button class="icon-button" data-share="${escapeHtml(id)}">${icon('share')}分享</button></li>`).join('')}${r.return_to_origin?`<li><span class="stop-number start-number">返</span><div><strong>返回本趟起点</strong><small>本段 ${Math.ceil(r.legs_seconds.at(-1)/60)} 分钟；下一趟从这里接续</small></div></li>`:''}</ol><div class="route-actions"><button id="openGoogleRoute" class="primary icon-button">${icon('route')}在 Google Maps 中打开</button><button id="previewRoute" class="icon-button">${icon('map')}地图预览</button></div><p>${escapeHtml(r.note)}</p></div>`;
+  $('previewRoute').textContent='查看 OSRM 原路线';$('previewRoute').onclick=()=>openMap('route');
+  $('routeSummary').querySelectorAll('[data-place-preview]').forEach(button=>button.onclick=()=>selectGooglePlace(button.dataset.placePreview));
+  const googleButton=document.createElement('button');googleButton.className='icon-button';googleButton.innerHTML=icon('map')+'Google Maps 路线预览';googleButton.onclick=()=>{state.googleChoice='route';renderGooglePreview();$('googlePreview').scrollIntoView({behavior:'auto',block:'start'});};$('routeSummary').querySelector('.route-actions').append(googleButton);
   $('openGoogleRoute').onclick=()=>openGoogleRoute(trip,start);
   $('routeSummary').querySelectorAll('[data-share]').forEach(button=>button.onclick=()=>sharePlaza(byId[button.dataset.share],button));
 }
@@ -190,6 +193,47 @@ function openGoogleRoute(trip,start){
   render('mapsDesktop',links.desktop);render('mapsMobile',links.mobile);render('mapsLegs',links.legs);
   $('mapsRouteDialog').showModal();
 }
+function queueOriginRoadData(){
+  const origin=state.origin;if(!origin?.confirmed||!state.bootstrap)return;
+  const key=`${origin.lng.toFixed(6)},${origin.lat.toFixed(6)}`;if(key===state.roadOriginKey)return;state.roadOriginKey=key;
+  post('/routing/prepare',origin).then(showCoverageStatus).catch(error=>{$('coverageStatus').textContent=error.message;});
+}
+function showCoverageStatus(c){
+  if(!c)return;const seconds=Math.max(0,Math.floor(Date.now()/1000-(c.started_at??Date.now()/1000)));
+  const bytes=c.download_bytes!=null?` · 已下载 ${(c.download_bytes/1048576).toFixed(1)} MB${c.total_bytes?` / ${(c.total_bytes/1048576).toFixed(1)} MB`:''}`:'';
+  state.coverageJob=c.job_id;const preparing=!['ready','idle','disabled','failed','cancelled'].includes(c.phase);$('cancelCoverage').hidden=!preparing||!c.job_id;$('cancelCoverage').disabled=Boolean(c.cancel_requested);
+  $('coverageStatus').textContent=c.cancel_requested&&preparing?'正在停止路网准备；当前网络读取结束后停止。':c.error??`${c.message}${c.region?' · '+c.region:''}${bytes}${!['ready','idle','disabled','failed','cancelled'].includes(c.phase)?` · 已用 ${seconds} 秒，首次准备可能需要数分钟`:''}`;
+}
+$('cancelCoverage').onclick=async()=>{if(!state.coverageJob)return;try{showCoverageStatus(await post('/routing/cancel',{job_id:state.coverageJob}));}catch(error){toast(error.message);}};
+let coverageLoading=false;
+async function loadCoverageStatus(){if(coverageLoading||!state.bootstrap)return;coverageLoading=true;try{showCoverageStatus(await api('/routing/coverage'));}catch{}finally{coverageLoading=false;}}
+setInterval(loadCoverageStatus,2000);
+async function loadEmbeds(){
+  const scan=state.scan;if(!scan)return;
+  const t=currentTrip(),key=scan.id+':'+(t?.id??'')+':'+JSON.stringify(t?.route?.order??[])+':'+Boolean(t?.route);
+  if(key===state.embedKey){renderGooglePreview();return;}state.embedKey=key;state.embedData=null;$('googlePreview').hidden=true;
+  try{const data=await api(`/scans/${scan.id}/embeds?`+new URLSearchParams({tid:t?.id??''}));if(state.embedKey!==key)return;state.embedData=data;state.googleChoice=data.route?'route':scan.plazas[0]?.id??'origin';renderGooglePreview();}
+  catch(error){if(state.embedKey===key){state.embedKey=null;$('googlePreviewNote').textContent=error.message;}}
+}
+function selectGooglePlace(id){state.googleChoice=id;renderGooglePreview();$('googlePreview').scrollIntoView({behavior:'auto',block:'start'});}
+function renderGooglePreview(){
+  const data=state.embedData;if(!data){$('googlePreview').hidden=true;return;}
+  const choice=state.googleChoice??'origin',isRoute=choice==='route'&&data.route?.length;
+  $('googlePreview').hidden=false;$('googleSegment').hidden=!isRoute||data.route.length<2;
+  let url;
+  if(isRoute){
+    const selection=Number($('googleSegment').value)||0;
+    const index=Math.min(selection,data.route.length-1);
+    $('googleSegment').innerHTML=data.route.map((part,i)=>`<option value="${i}" ${i===index?'selected':''}>第 ${i+1} 段 · ${part.from_index===0?'起点':part.from_index} → ${part.to_index}</option>`).join('');
+    url=data.route[index].url;$('googlePreviewTitle').textContent=`第 ${currentTrip()?.number??''} 趟 · Google Maps 路线`;
+    $('googlePreviewNote').textContent='按已优化的站点顺序显示；道路由 Google 重新规划，完整站点顺序见下方列表。';
+  }else{
+    url=data.places[choice]??data.origin;const place=state.scan?.plazas.find(p=>p.id===choice);
+    $('googlePreviewTitle').textContent=place?.name??'起点 · Google Maps';$('googlePreviewNote').textContent=place?.address??'地图位置使用已确认的起点坐标。';
+  }
+  if($('googleFrame').getAttribute('src')!==url)$('googleFrame').src=url;
+}
+$('googleSegment').onchange=renderGooglePreview;
 function boundaryText(c){return c.mode==='polygon'?`绘制区域 · ${c.polygon.length} 个顶点`:`直径 ${c.diameter_miles} 英里`;}
 async function loadHistory(){
   const data=await api('/history?'+new URLSearchParams({q:$('historyQuery').value,status:$('historyStatus').value,offset:state.historyOffset}));
@@ -476,7 +520,7 @@ $('checkRouting').onclick=async()=>{
   const button=$('checkRouting');button.disabled=true;$('routingStatus').textContent='正在检查本趟起点附近的矩阵与道路服务…';
   try{const trip=currentTrip();const start=trip?.start??trip?.route?.start??state.scan?.config.origin??state.origin;
     const c=structuredClone(state.scan?.config??config());c.origin={lat:start.lat,lng:start.lng,label:start.name??start.label??coordinateLabel(start.lat,start.lng),source:'pin',confirmed:true,accuracy_m:null};
-    const result=await post('/routing/check',c);$('routingStatus').textContent=result.message;
+    const result=await post('/routing/check',c);if(result.preparing){showCoverageStatus(result.coverage);$('routingStatus').textContent='正在自动准备路网，请查看下方进度；完成后可计算路线。';}else $('routingStatus').textContent=result.message;
   }catch(error){$('routingStatus').textContent=error.message;}finally{button.disabled=false;}
 };
 $('searchForm').onsubmit=async event=>{event.preventDefault();clearErrors();if(!canSearch())return;state.busy=true;syncForm();try{state.scan=await post('/scans',config());state.tripId=null;state.selected.clear();renderResults();poll();}catch(error){showError(error);}finally{state.busy=false;syncForm();}};
@@ -485,7 +529,12 @@ $('retryScan').onclick=async()=>{state.busy=true;renderResults();try{state.scan=
 $('exportScan').onclick=()=>download(state.scan.id);
 $('nextTrip').onclick=async()=>{if(state.busy)return;state.busy=true;renderResults();try{state.scan=await post(`/scans/${state.scan.id}/trips`);state.tripId=state.scan.trips.at(-1)?.id;}catch(error){toast(error.message);}finally{state.busy=false;renderResults();}};
 $('tripSelect').onchange=()=>{state.tripId=$('tripSelect').value;renderResults();persist();};
-$('calculate').onclick=async()=>{if(state.busy)return;const closed=$('returnOrigin').checked;const tid=state.tripId;state.busy=true;renderResults();try{state.scan=await post(`/scans/${state.scan.id}/trips/${tid}/route`,{return_to_origin:closed});}catch(error){const t=currentTrip();if(t)t.error=error.message;}finally{state.busy=false;renderResults();}};
+$('calculate').onclick=async()=>{if(state.busy)return;const closed=$('returnOrigin').checked,tid=state.tripId,sid=state.scan.id,token=Symbol('route');state.routeToken=token;state.busy=true;renderResults();
+  try{let retry=true;for(;;){if(state.routeToken!==token)return;const result=await post(`/scans/${sid}/trips/${tid}/route`,{return_to_origin:closed,retry_coverage:retry});retry=false;
+      if(state.routeToken!==token)return;
+      if(!result.preparing){state.scan=result;state.googleChoice='route';break;}
+      showCoverageStatus(result.coverage);$('calculate').textContent='正在准备道路数据…';await new Promise(resolve=>setTimeout(resolve,1800));}}
+  catch(error){if(state.routeToken===token){const t=currentTrip();if(t)t.error=error.message;}}finally{if(state.routeToken===token){state.busy=false;renderResults();}}};
 $('previewSelection').onclick=()=>openMap('selection');
 $('filterHistory').onclick=()=>{state.historyOffset=0;loadHistory().catch(e=>toast(e.message));};
 $('historyQuery').onkeydown=e=>{if(e.key==='Enter')$('filterHistory').click();};

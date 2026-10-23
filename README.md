@@ -23,9 +23,9 @@ py -3 -m venv .venv
 
 ## 免费地图与地址查询
 
-当前应用的地图、绘制和地址查询均不需要 Google API key、结算账户或付费订阅。原先的 Google Maps JavaScript / Geocoding 集成已移除；已有搜索、边界、历史和行程仍可打开。Google 只用于用户主动分享的目的地链接，不调用计费 Maps / Places / Routes API。
+当前应用的地图、绘制和地址查询均不需要 Google API key、结算账户或付费订阅。原先的 Google Maps JavaScript / Geocoding 集成已移除；已有搜索、边界、历史和行程仍可打开。地点与整趟路线现在默认使用 Google Maps iframe 预览；不调用计费 Maps JavaScript / Places / Routes API。绘制编辑器与精确 OSRM 线路仍使用免费 MapLibre。
 
-- **地图与路线预览：MapLibre GL JS + OpenFreeMap。** 公共底图免费、无需注册或 key；使用 OSM 数据并保留版权署名。公共服务没有 SLA，仍需要网络。浏览器需要 WebGL 支持，服务器无需 GPU。可在 `.env` 设置 `MAP_STYLE_URL` 为自己的兼容样式服务。
+- **绘制编辑器与 OSRM 原线路：MapLibre GL JS + OpenFreeMap。** 公共底图免费、无需注册或 key；使用 OSM 数据并保留版权署名。公共服务没有 SLA，仍需要网络。浏览器需要 WebGL 支持，服务器无需 GPU。可在 `.env` 设置 `MAP_STYLE_URL` 为自己的兼容样式服务。
 - **边界编辑：Terra Draw。** 本地提供版本固定的开源 JS/CSS 文件，不依赖第三方 CDN。点按加入顶点，完成后拖动顶点修改形状；拖动边中点增加顶点。另有键盘编辑面板，支持删除顶点和在地图中心增加顶点。起点支持拖动和方向键校正。应用 / 取消和 Escape 保持草稿边界。
 - **美国街道地址：US Census。** 默认“查找” / “美国街道地址”使用 Census。适合输入完整门牌街道、城市和邮编；不按商业地点名称搜索，返回位置可能沿街道范围插值，并非屋顶或入口保证。
 - **公开地点 / 国际地址：Nominatim。** 单独点击“查询公开地点或国际地址”，再确认“查询此公开地点”。适合商业中心名称和国际查询。OSM 覆盖不均；城市、街道等大范围匹配会提示校正具体起点。不能据此声称其对所有美国街道地址都比 Census 更准确。
@@ -130,3 +130,17 @@ tailscale serve status
 最近 15 分钟内相同查询区域复用本地原始地图缓存，筛选阈值变化仍重新核对资格；超过期限重新请求。缓存最多 64 个区域，与历史/检查点分开保存。公共服务等待不是完成进度：界面显示实际耗时、已完成区域数、当前提供服务的主机、备用请求、接收 KB 与筛选阶段。20 秒后标明服务响应较慢；本地轮询断连另行提示。服务端查询上限 20 秒，HTTP 连接/读取超时分别 5/25 秒；备用服务仍只尝试一次，403/429 不切换。取消会在当前网络读取结束或下个数据块后生效，不再开始备用请求；不伪装立即终止远端查询。最后一个区域处理后移除无意义的一秒等待。
 
 在 iPhone / 支持 Web Share 的浏览器上，点击任一站点“分享”直接调用系统分享面板，使用即时可用的 `/maps/place/` 地点链接，不等待网络获取短链接，以保留 Safari 的点击激活权限。取消分享不会弹出第二个面板；系统分享不可用时回退复制链接。没有原生分享能力的浏览器仍尝试取得并验证真实短链。
+
+## 自动路网与 Google Maps 嵌入（2026-10-22）
+
+确认新起点后后台预备道路数据；搜索完成后核对全部结果，计算时再次核对整批起点和目的地。已有可用路网直接复用；缺少覆盖时根据 Geofabrik 公共区域目录选择覆盖整批地点的最小 extract，自动下载并执行 `extract → partition → customize`，启动仅绑定 loopback 的区域 OSRM。相邻批次仍使用同一图上的完整驾驶时间矩阵，不拼接独立图的跨区域时间。已准备数据按区域、OSRM 版本与驾驶配置缓存到 `data/routing/`；应用重启后可直接重启缓存图，不重复下载/预处理。下载失败、取消和准备失败均不修改已保存行程。
+
+原有 `OSRM_URL` 仍可使用。已知其区域时设置 `OSRM_BASE_REGION`（例如 `us/new-york`）；否则逐点检查道路吸附。新图与旧服务使用不同本机端口，不会停掉旧服务或重写旧数据。后台只执行一个准备任务，最多缓存两个运行中的新区域进程；有路线正在使用的进程不会被淘汰，磁盘图仍保留。大区域首次准备可能需要较多 RAM、磁盘与时间；默认单个 PBF 下载上限 2048 MB，并检查可用磁盘，资源不足会说明原因，不会自动购买服务器。可在合适的自托管机器上设置 `OSRM_MAX_EXTRACT_MB`（0 为不设大小上限），不能承诺任意全球跨度都能在普通笔记本上运行。
+
+界面显示下载 MB、提取、分区、权重与启动状态，并可“停止准备”。路线请求在准备时返回 202，浏览器显示进度后自动继续计算；不会把未准备好的矩阵当成成功。自动模式需要本机 OSRM 二进制；`Dockerfile` 已包含同一固定版本的 OSRM 与 Python。没有 OSRM 时仍可搜索，计算会明确提示安装。`OSRM_AUTO_DOWNLOAD=0` 可保留固定服务模式。
+
+列表名称和优化路线站名可点开 Google 地点嵌入；计算后默认显示完整本趟的 Google 路线嵌入，长批次按 10 个驾驶分段切换、不漏站。默认无 key 的 Google legacy iframe 已实测地点及起点+8个新站，仍有“在 Google Maps 中打开”作为未加载时的备用。该 legacy URL 不是 Google 公开 Embed API 稳定性承诺的一部分。可选 `GOOGLE_MAPS_EMBED_KEY` 切换官方 Embed API：目前请求不收费，但 Google 要求 API key 和启用结算的项目；没有为本交付创建账号或启用结算。
+
+Google iframe 根据相同站点顺序重新计算道路，无法直接画出任意 OSRM polyline；“查看 OSRM 原路线”保留精确的 OSRM 预览。iframe 不能用作自由绘制编辑器，区域绘制仍使用 MapLibre/Terra Draw。显示嵌入时会把对应地点坐标发给 Google。
+
+依据：[Geofabrik 免费数据](https://download.geofabrik.de/)、[OSRM](https://github.com/Project-OSRM/osrm-backend)、[Google Embed 免费用量](https://developers.google.com/maps/documentation/embed/usage-and-billing)、[官方 key/结算前提](https://developers.google.com/maps/documentation/embed/quickstart)。

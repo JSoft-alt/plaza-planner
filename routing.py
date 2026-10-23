@@ -28,10 +28,11 @@ def validate_waypoints(payload, size, keys):
 
 
 def request_osrm(service, points, **params):
+    endpoint = params.pop("_base_url", None) or OSRM
     coordinates = ";".join(f"{lng:.7f},{lat:.7f}" for lng, lat in points)
     params["radiuses"] = ";".join([str(SNAP_METERS)] * len(points))
     try:
-        reply = requests.get(f"{OSRM}/{service}/v1/driving/{coordinates}", params=params, timeout=(5, 30))
+        reply = requests.get(f"{endpoint}/{service}/v1/driving/{coordinates}", params=params, timeout=(5, 30))
         reply.raise_for_status()
         payload = reply.json()
     except (requests.RequestException, ValueError) as exc:
@@ -89,17 +90,17 @@ def optimize(matrix, closed=False):
     return order, optimal
 
 
-def calculate(config, stops, closed=False, start=None):
+def calculate(config, stops, closed=False, start=None, osrm_url=None):
     start = dict(start or config.origin.model_dump(mode="json"))
     points = [(start["lng"], start["lat"])] + [(p["lng"], p["lat"]) for p in stops]
-    table = request_osrm("table", points, annotations="duration")
+    table = request_osrm("table", points, annotations="duration", **({"_base_url": osrm_url} if osrm_url else {}))
     validate_waypoints(table, len(points), ("sources", "destinations"))
     matrix = table.get("durations")
     if not isinstance(matrix, list) or len(matrix) != len(points) or any(not isinstance(r, list) for r in matrix):
         raise ValueError("驾驶时间矩阵格式无效。")
     order, optimal = optimize(matrix, closed)
     line_points = [points[0]] + [points[i] for i in order] + ([points[0]] if closed else [])
-    route = request_osrm("route", line_points, overview="full", geometries="geojson", steps="false", continue_straight="false")
+    route = request_osrm("route", line_points, overview="full", geometries="geojson", steps="false", continue_straight="false", **({"_base_url": osrm_url} if osrm_url else {}))
     validate_waypoints(route, len(line_points), ("waypoints",))
     routes = route.get("routes")
     if not isinstance(routes, list) or not routes or not isinstance(routes[0], dict):

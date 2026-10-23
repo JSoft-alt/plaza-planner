@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+os.environ.setdefault('OSRM_AUTO_DOWNLOAD','0')
 import app
 import routing
 import store

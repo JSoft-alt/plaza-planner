@@ -42,7 +42,7 @@
       </form>
       <p class="coverage">依据已映射的小店数量筛选。地图数据可能缺失，结果不代表全部实体商户。</p>
     </aside>
-    <div class="results-panel">
+    <div class="results-panel"><div class="coverage-row"><p id="coverageStatus" class="coverage-status" role="status"></p><button id="cancelCoverage" class="text-button" hidden>停止准备</button></div>
       <div id="empty" class="empty"><svg class="sweep-illustration" viewBox="0 0 240 240" aria-hidden="true"><circle cx="120" cy="120" r="94"/><circle cx="120" cy="120" r="62"/><circle cx="120" cy="120" r="30"/><path d="M120 16v208M16 120h208M120 120 184 51"/><circle class="dot" cx="156" cy="78" r="6"/><circle class="dot" cx="67" cy="142" r="5"/><circle class="dot" cx="171" cy="171" r="5"/></svg><h2>这一趟，从起点开始。</h2><p>确认地址并设定范围，<br>符合条件的商业区会按方位依次排在这里。</p><div class="empty-flow"><span>搜索商业区</span><i>→</i><span>按序分趟</span><i>→</i><span>计算路线</span></div></div>
       <section id="scanResults" hidden>
         <div id="activeProgress" class="progress-area" hidden><div class="row"><strong id="progressText"></strong><button id="cancelScan" class="text-button">取消搜索</button></div><p id="searchTiming" class="search-timing"></p><progress id="progress"></progress></div>
@@ -50,6 +50,7 @@
         <div class="results-heading"><div><h2><span id="resultCount">0</span> 个商业区</h2><p id="scanLabel"></p></div><button id="exportScan">导出 JSON</button></div>
         <div class="trip-controls"><div><label for="tripSelect">当前行程</label><select id="tripSelect"><option value="">尚未分趟</option></select></div><button id="nextTrip">取下一趟</button><button id="previewSelection" class="text-button" disabled>查看所选地点</button></div>
         <div class="routing-check"><button id="checkRouting" class="text-button">检查路线服务</button><p id="routingStatus" class="hint" role="status"></p></div>
+        <section id="googlePreview" class="google-preview" hidden><div class="row"><div><h3 id="googlePreviewTitle">Google Maps</h3><p id="googlePreviewNote" class="hint"></p></div><select id="googleSegment" aria-label="Google 路线预览分段" hidden></select></div><iframe id="googleFrame" title="Google Maps 地点或路线预览" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe><p class="hint">若预览未能显示，可用地点分享或“在 Google Maps 中打开”。Google 将根据相同站点顺序重新计算道路与时间。</p></section>
         <section id="tripPanel" class="trip-panel" hidden><div class="row"><div><h3 id="tripTitle"></h3><p id="tripDescription"></p></div><button id="calculate" class="primary">计算路线</button></div><label class="check"><input id="returnOrigin" type="checkbox">最后返回本趟起点（下一趟从返回点接续）</label><p id="routeError" class="field-error" role="alert"></p><div id="routeSummary" hidden></div></section>
         <div class="list-caption"><span>扫掠顺序</span><span>距离为距起点直线距离</span></div>
         <ol id="plazaList" class="plaza-list"></ol>

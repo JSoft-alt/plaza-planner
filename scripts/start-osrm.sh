@@ -11,4 +11,7 @@ if [ ! -f "$graph.properties" ] || [ ! -f "$graph.cell_metrics" ]; then
   echo "Missing preprocessed MLD graph: $graph.*. See deploy/SETUP.md." >&2
   exit 1
 fi
-exec osrm-routed --algorithm mld --ip 127.0.0.1 --port "${OSRM_PORT:-5001}" "$graph"
+graph_dir=$(CDPATH= cd -- "$(dirname -- "$graph")" && pwd)
+graph_name=$(basename -- "$graph")
+cd "$graph_dir"
+exec osrm-routed --algorithm mld --ip 127.0.0.1 --port "${OSRM_PORT:-5001}" "$graph_name"

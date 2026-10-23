@@ -16,30 +16,32 @@ Install Docker Engine + Compose on Linux, or a suitable Docker distribution on y
 From this repository's root:
 
 ```sh
-# Only run once; New York example. Choose data covering every planned trip.
-python3 scripts/download-map.py https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf
-# Windows: use `py -3` instead of `python3` if needed.
-docker compose run --rm prepare
-docker compose up -d --build osrm planner
-# Open http://localhost:8011 on the host machine.
-docker compose logs --tail=40 osrm planner
+docker compose up -d --build planner
+# Open http://localhost:8011, confirm a start, then search/calculate.
+docker compose logs --tail=40 planner
 ```
 
-The preprocessing and runtime use the **same pinned official OSRM image and digest**. `extract → partition → customize` prepares MLD driving data. The script refuses to overwrite a completed graph. For a fresh map or OSRM version, prepare a new directory first, keep a backup, and replace the old graph only after successful checks. Failed partial preparation may leave files: preserve or rename that directory before a clean retry. Never mix graph versions or run preprocessing on a graph being served.
+The planner image now contains Python and the pinned official OSRM engine. Missing regional road data is automatically downloaded from Geofabrik and prepared in the background when a confirmed location or batch needs it. Child OSRM processes bind to private container loopback ports. The browser shows actual download MB and preprocessing phases; preparation can be cancelled. A route request returns 202 while preparing, and the UI retries until ready or a definite error. Never treat 202 as a computed route.
 
-OSRM has no published host port; the app connects internally to `http://osrm:5000`. The app binds only to host loopback at port 8011. SQLite/exports use the persistent `planner-data` volume; **do not use `docker compose down -v`** when keeping history. Stop normally with `docker compose stop`. OSRM may take longer than the app to start; use “检查路线服务” after it is ready. The app healthcheck checks the web app only; it does not assert road-data coverage.
+`data/routing/` in the persistent `planner-data` volume contains the regional catalog, PBF files, graph caches, preparation logs and ready manifests. Region + OSRM version + profile content determine the cache key. Reopening a cached area starts its prepared graph without downloading again. Completed graphs are not rebuilt on each pin movement or daily schedule. Update data intentionally if fresher roads are required; do not edit a graph being served.
 
-To test the real New York matrix and two chained 8-new-stop routes inside the app container:
+Default individual extract download limit is **2048 MB**, configurable using `OSRM_MAX_EXTRACT_MB`; 0 removes the ceiling only on a host with adequate resources. The downloader also checks free disk with preparation headroom. Global/cross-region batches may require a much larger common extract than a local trip; do not promise unlimited geography on a small host. No paid machine is purchased automatically. Keep at least several GB RAM and sufficient disk for your intended region; a size check is not an exact memory prediction.
+
+The app binds only to host loopback at port 8011. **Do not use `docker compose down -v`** when keeping history. Stop with `docker compose stop`. The healthcheck checks web availability, not road coverage. Only two managed region engines remain active when possible; in-use engines are protected, and older graph files stay cached.
+
+For fixed/manual OSRM instead of automatic provisioning, existing `scripts/download-map.py` and the `prepare`/`osrm` services remain available:
 
 ```sh
-docker compose exec planner python scripts/smoke-route.py --osrm-url http://osrm:5000
+python3 scripts/download-map.py https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf
+docker compose run --rm prepare
+OSRM_AUTO_DOWNLOAD=0 OSRM_URL=http://osrm:5000 docker compose --profile manual up -d --build planner osrm
 ```
 
-That smoke uses public Manhattan road test points, not discovered businesses. For another region, test its actual reachable public points and real discovered destinations. A successful local probe does not prove every destination is within the extract or within 100 m of a driveable road.
+On PowerShell, set those environment values with `$env:OSRM_AUTO_DOWNLOAD="0"` and `$env:OSRM_URL="http://osrm:5000"` before the Compose command. Manual preprocessing/runtime must use the same pinned image. The scripts refuse to overwrite completed manual graphs. Keep backups when rebuilding.
 
 ## Native macOS / Linux
 
-If OSRM is already installed, use a graph prepared with the same binary version. On macOS Homebrew: `brew install osrm-backend` (verify current installation requirements with Homebrew). Prepare a new extract directory with `osrm-extract -p /path/to/car.lua osrm-data/map.osm.pbf`, then `osrm-partition osrm-data/map.osrm` and `osrm-customize osrm-data/map.osrm`. The Lua profile is part of your OSRM installation; locate it rather than guessing its installed prefix.
+Automatic mode requires installed OSRM binaries and car.lua. With Homebrew OSRM installed, `./run.sh` can now download and prepare missing regions itself; no manual graph is required. To reuse a fixed graph instead, use one prepared with the same binary version. On macOS Homebrew: `brew install osrm-backend` (verify current installation requirements with Homebrew). Prepare a new extract directory with `osrm-extract -p /path/to/car.lua osrm-data/map.osm.pbf`, then `osrm-partition osrm-data/map.osrm` and `osrm-customize osrm-data/map.osrm`. The Lua profile is part of your OSRM installation; locate it rather than guessing its installed prefix.
 
 ```sh
 ./scripts/start-osrm.sh /absolute/path/to/map.osrm

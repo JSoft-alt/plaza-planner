@@ -22,8 +22,10 @@ from typing import Literal
 
 import discovery
 import geocoding
-from models import SearchInput, ScheduleInput, cron_trigger
+from models import Origin, SearchInput, ScheduleInput, cron_trigger
 import routing
+import road_data
+import embeds
 import sharing
 import store
 
@@ -63,6 +65,10 @@ def schedules_list():
 def run(sid, schedule_id=None):
     try:
         discovery.run_scan(sid)
+        completed = store.get_scan(sid)
+        if completed['status'] == 'complete':
+            road_data.request([(completed['config']['origin']['lng'],completed['config']['origin']['lat'])]
+                              + [(p['lng'],p['lat']) for p in completed['plazas']])
     finally:
         if schedule_id:
             try:
@@ -127,6 +133,7 @@ async def lifespan(app):
         if rec["status"] in ("running", "queued"):
             store.update_scan(rec["id"], cancel=True)
     pool.shutdown(wait=True)
+    road_data.shutdown()
     lockfile.close()
 
 
@@ -270,12 +277,17 @@ def trip(sid: str):
 class RouteInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     return_to_origin: bool = Field(default=False, strict=True)
+    retry_coverage: bool = Field(default=False, strict=True)
 
 
 @app.post("/api/routing/check")
 def check_routing(body: SearchInput):
     point = dict(id="probe", lat=body.origin.lat + .00001, lng=body.origin.lng)
-    routing.calculate(body, [point])
+    coverage = road_data.request([(body.origin.lng,body.origin.lat)])
+    if coverage['phase'] in ('failed','cancelled'):raise ValueError(coverage['error'])
+    if coverage['phase'] != 'ready':return JSONResponse({'preparing':True,'coverage':road_data.Manager.public(coverage)},status_code=202)
+    with road_data.using(coverage['endpoint']):
+        routing.calculate(body, [point], osrm_url=coverage['endpoint'])
     return dict(ok=True, message="本趟起点附近的 OSRM 矩阵与道路服务已连通。计算时仍会核对所有目的地的覆盖与可达性。")
 
 
@@ -291,8 +303,15 @@ def route(sid: str, tid: str, body: RouteInput):
         if any(t["number"] > current["number"] and t.get("start") for t in rec["trips"]):
             raise ValueError("下一趟已接续此路线；本趟已锁定，请使用保存的路线。")
         by_id = {p["id"]: p for p in rec["plazas"]}
-        result = routing.calculate(SearchInput.model_validate(rec["config"]), [by_id[i] for i in current["plaza_ids"]],
-                                  body.return_to_origin, start=store.trip_start(rec, current))
+        start = store.trip_start(rec, current)
+        stops = [by_id[i] for i in current['plaza_ids']]
+        coverage = road_data.request([(start['lng'],start['lat'])]+[(p['lng'],p['lat']) for p in stops],retry=body.retry_coverage)
+        if coverage['phase'] in ('failed','cancelled'):raise ValueError(coverage['error'])
+        if coverage['phase'] != 'ready':return JSONResponse({'preparing':True,'coverage':road_data.Manager.public(coverage)},status_code=202)
+        with road_data.using(coverage['endpoint']):
+            result = routing.calculate(SearchInput.model_validate(rec["config"]), stops,
+                                      body.return_to_origin, start=start, osrm_url=coverage['endpoint'])
+        result['road_data'] = coverage.get('road_data') or {'region':coverage.get('region','已配置路网')}
         store.update_trip(sid, tid, route=result, error=None)
         store.auto_export(sid)
         return store.get_scan(sid)
@@ -301,6 +320,39 @@ def route(sid: str, tid: str, body: RouteInput):
         raise
     finally:
         route_lock.release()
+
+
+@app.post('/api/routing/prepare')
+def prepare_coverage(body: Origin):
+    return road_data.Manager.public(road_data.request([(body.lng,body.lat)],retry=True))
+
+
+class CoverageCancelInput(BaseModel):
+    job_id: str = Field(pattern='^[a-f0-9]{24}$')
+
+
+@app.post('/api/routing/cancel')
+def cancel_coverage(body: CoverageCancelInput):
+    return road_data.manager().cancel(body.job_id)
+
+
+@app.get('/api/routing/coverage')
+def coverage_status():
+    return road_data.status()
+
+
+@app.get('/api/scans/{sid}/embeds')
+def maps_embeds(sid: str, tid: str = ''):
+    rec = store.get_scan(sid)
+    trip = next((t for t in rec['trips'] if t['id']==tid),None)
+    urls = {'origin':embeds.place(rec['config']['origin']),
+            'places':{p['id']:embeds.place(p) for p in rec['plazas']}}
+    if trip and trip.get('route'):
+        route=trip['route']; by_id={p['id']:p for p in rec['plazas']}
+        start=route.get('start') or trip.get('start') or rec['config']['origin']
+        points=[start]+[by_id[pid] for pid in route['order']]+([start] if route.get('return_to_origin') else [])
+        urls['route']=embeds.route(points)
+    return urls
 
 
 @app.post("/api/scans/{sid}/share/{pid:path}")

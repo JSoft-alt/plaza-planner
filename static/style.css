@@ -883,3 +883,14 @@
 .route-stops small{margin-left:0}
 
 .search-timing{font-size:13px;line-height:1.7;color:var(--muted);margin:10px 0 0;overflow-wrap:anywhere}
+
+.google-preview{margin:18px 0 24px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:white}
+.google-preview>.row{padding:16px 18px;gap:12px;flex-wrap:wrap}
+.google-preview h3{margin:0;font-size:16px}
+.google-preview p{margin:6px 0 0}
+.google-preview>p{padding:0 18px 14px}
+.google-preview iframe{display:block;width:100%;height:430px;min-width:200px;min-height:240px;border:0}
+.place-preview-button{border:0;background:transparent;padding:0;min-height:30px;white-space:normal;text-align:left;font-weight:650;color:inherit;text-decoration:underline;text-decoration-color:#b8c7bb;text-underline-offset:4px}
+.place-preview-button:hover{background:transparent;border:0;color:#245da2}
+.coverage-status{font-size:13px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
+@media(max-width:600px){.google-preview iframe{height:340px}.google-preview>.row{padding:14px}.google-preview>p{padding:0 14px 14px}}

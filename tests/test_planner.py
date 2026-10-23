@@ -8,6 +8,7 @@ import itertools
 import json
 from pathlib import Path
 import tempfile
+import os
 import time
 import unittest
 from unittest.mock import patch, Mock
@@ -15,6 +16,7 @@ from unittest.mock import patch, Mock
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+os.environ['OSRM_AUTO_DOWNLOAD']='0'
 import app
 import discovery
 from models import SearchInput, ScheduleInput, cron_trigger, projection, sweep
@@ -241,6 +243,28 @@ class Application(unittest.TestCase):
         self.assertNotIn('/',store.safe_name(before))
         pending=store.insert_scan(config().model_dump(mode="json"))['id'];store.recover()
         self.assertEqual(store.get_scan(pending)['status'],'partial')
+
+    def test_route_preparation_is_pending_and_keeps_batch_membership(self):
+        sid=self.make_scan(2);tid=store.new_trip(sid)
+        import road_data
+        with patch.object(road_data,'request',return_value=dict(phase='download',job_id='a'*24,message='downloading')):
+            response=self.client.post(f'/api/scans/{sid}/trips/{tid}/route',json={},headers=self.headers)
+        self.assertEqual(response.status_code,202,response.text)
+        self.assertTrue(response.json()['preparing'])
+        trip=store.get_scan(sid)['trips'][0]
+        self.assertEqual(trip['plaza_ids'],['way:1','way:2']);self.assertIsNone(trip['route'])
+
+    def test_google_embed_endpoint_uses_saved_optimized_order(self):
+        sid=self.make_scan(2);tid=store.new_trip(sid)
+        store.update_trip(sid,tid,route=dict(order=['way:2','way:1'],return_to_origin=False))
+        response=self.client.get(f'/api/scans/{sid}/embeds?tid={tid}')
+        self.assertEqual(response.status_code,200)
+        from urllib.parse import parse_qs,urlsplit
+        data=response.json()
+        query=parse_qs(urlsplit(data['route'][0]['url']).query)
+        import embeds
+        self.assertEqual(query['daddr'][0],' to:'.join(embeds.coordinate(plaza(i)) for i in [2,1]))
+        self.assertEqual(len(data['places']),2)
 
     def test_sharing_only_destination_formats(self):
         sid=self.make_scan(1)
