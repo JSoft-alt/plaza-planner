@@ -1,7 +1,6 @@
 """Local plaza visit planner. Run one Uvicorn worker; see README.md."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -12,7 +11,6 @@ from threading import Lock, RLock
 import time
 from urllib.parse import urlsplit
 
-from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
@@ -22,7 +20,7 @@ from typing import Literal
 
 import discovery
 import geocoding
-from models import Origin, SearchInput, ScheduleInput, cron_trigger
+from models import Origin, SearchInput
 import routing
 import continuous_routing
 import road_data
@@ -47,19 +45,13 @@ TOKEN = secrets.token_urlsafe(32)
 pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="discovery")
 submit_lock = RLock()
 route_lock = Lock()
-scheduler = BackgroundScheduler(timezone="UTC", daemon=True)
 logger = logging.getLogger(__name__)
-
-
-def next_run(cron, tz, now=None):
-    result = cron_trigger(cron, tz).get_next_fire_time(None, datetime.fromtimestamp(now or time.time(), timezone.utc))
-    return result.timestamp() if result else None
 
 
 def schedules_list():
     with store.db() as conn:
         rows = conn.execute("SELECT * FROM schedules ORDER BY rowid DESC").fetchall()
-    return [dict(id=r["id"], **json.loads(r["payload"]), next_run=r["next_run"],
+    return [dict(dict(id=r["id"], **json.loads(r["payload"])), enabled=bool(r["enabled"]), next_run=r["next_run"],
                  running=r["running"], last_outcome=r["last_outcome"]) for r in rows]
 
 
@@ -82,31 +74,10 @@ def run(sid, schedule_id=None):
                 logger.exception("Schedule outcome could not be saved")
 
 
-def schedule_tick():
-    with submit_lock:
-        now = time.time()
-        for spec in schedules_list():
-            if not spec["enabled"] or not spec["next_run"] or spec["next_run"] > now:
-                continue
-            future = next_run(spec["cron"], spec["timezone"], now + 1)
-            with store.db() as conn:
-                conn.execute("UPDATE schedules SET next_run=? WHERE id=?", (future, spec["id"]))
-            if spec["running"]:
-                continue  # Coalesce/skip overlapping runs, preserving the actual last outcome.
-            if sum(item["status"] in ("running", "queued") for item in store.list_scans()["items"]) >= 2:
-                with store.db() as conn:
-                    conn.execute("UPDATE schedules SET last_outcome=? WHERE id=?", ("本次跳过：已有两个搜索运行", spec["id"]))
-                continue
-            scan = store.insert_scan(spec["config"], spec["id"])
-            with store.db() as conn:
-                conn.execute("UPDATE schedules SET running=? WHERE id=?", (scan["id"], spec["id"]))
-            pool.submit(run, scan["id"], spec["id"])
-
-
 @asynccontextmanager
 async def lifespan(app):
     store.init()
-    # A local file lock prevents two app instances sharing the scheduler database.
+    # A local file lock prevents two app instances sharing the history database.
     lockfile = (store.DATA / ".instance.lock").open("a+")
     if os.name == "nt":
         import msvcrt
@@ -119,17 +90,10 @@ async def lifespan(app):
         import fcntl
         fcntl.flock(lockfile.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     store.recover()
-    # No catch-up storm after downtime. Start with the next future occurrence.
+    # Retire automatic searches without deleting prior schedules or history.
     with store.db() as conn:
-        for spec in schedules_list():
-            future = next_run(spec["cron"], spec["timezone"], time.time() + 1) if spec["enabled"] else None
-            missed = spec["next_run"] and spec["next_run"] < time.time()
-            conn.execute("UPDATE schedules SET next_run=?, last_outcome=? WHERE id=?", (
-                future, "停机期间错过的运行已跳过" if missed else spec["last_outcome"], spec["id"]))
-    scheduler.add_job(schedule_tick, "interval", seconds=15, max_instances=1, coalesce=True, id="dispatch")
-    scheduler.start()
+        conn.execute("UPDATE schedules SET enabled=0,next_run=NULL,running=NULL")
     yield
-    scheduler.shutdown(wait=False)
     for rec in store.list_scans()["items"]:
         if rec["status"] in ("running", "queued"):
             store.update_scan(rec["id"], cancel=True)
@@ -269,8 +233,13 @@ def retry(sid: str):
     return store.get_scan(sid)
 
 
+class BatchInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    batch_size: int | None = Field(default=None,ge=1,le=15,strict=True)
+
+
 @app.post("/api/scans/{sid}/trips")
-def trip(sid: str):
+def trip(sid: str, body: BatchInput = BatchInput()):
     rec=store.get_scan(sid)
     if rec['status']!='complete':raise ValueError('请先完成搜索。')
     if not rec['trips'] and not rec.get('route_plan'):
@@ -284,9 +253,27 @@ def trip(sid: str):
                 plan=continuous_routing.build(rec,coverage['endpoint'])
             store.update_scan(sid,route_plan=plan)
         finally:route_lock.release()
-    store.new_trip(sid)
+    store.new_trip(sid,body.batch_size)
     store.auto_export(sid)
     return store.get_scan(sid)
+
+
+class OutreachInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(pattern=r'^(node|way|relation):[0-9]+$')
+    name: str = Field(min_length=1,max_length=300)
+    declined: bool = Field(default=True,strict=True)
+
+
+@app.get('/api/outreach/declines')
+def outreach_declines():
+    return dict(items=store.outreach_declines())
+
+
+@app.post('/api/outreach/declines')
+def outreach_decline(body: OutreachInput):
+    store.set_outreach_decline(body.id,body.name,body.declined)
+    return outreach_declines()
 
 
 @app.post('/api/scans/{sid}/continuous-copy')
@@ -342,7 +329,7 @@ def route(sid: str, tid: str, body: RouteInput):
                                       **({'fixed_end_id':stops[-1]['id']} if rec.get('route_plan') else {}))
         if rec.get('route_plan'):
             result['global_optimal']=False
-            result['note']='按全区域快速连续计划分段；本趟固定首尾优化。整体未证明全局最优，不含实时交通；下一趟从本趟最后一站接续。'
+            result['note']='快速路线估算，未证明全局最优；不含实时交通。下一趟从最后一站接续。'
         result['road_data'] = coverage.get('road_data') or {'region':coverage.get('region','已配置路网')}
         store.update_trip(sid, tid, route=result, error=None)
         store.auto_export(sid)
@@ -430,32 +417,7 @@ def list_schedules():
 
 
 @app.post("/api/schedules")
-def create_schedule(body: ScheduleInput):
-    sid = store.uid()
-    with submit_lock, store.db() as conn:
-        if conn.execute("SELECT count(*) FROM schedules").fetchone()[0] >= 30:
-            raise ValueError("最多保存 30 个定时搜索。")
-        conn.execute("INSERT INTO schedules VALUES (?,?,?,?,?,?)", (sid, store.dump(body.model_dump(mode="json")),
-                     int(body.enabled), next_run(body.cron, body.timezone) if body.enabled else None, None, None))
-    return {"id": sid}
-
-
 @app.put("/api/schedules/{sid}")
-def edit_schedule(sid: str, body: ScheduleInput):
-    with submit_lock, store.db() as conn:
-        if not conn.execute("SELECT id FROM schedules WHERE id=?", (sid,)).fetchone():
-            raise KeyError("找不到这个定时搜索。")
-        conn.execute("UPDATE schedules SET payload=?,enabled=?,next_run=? WHERE id=?", (
-            store.dump(body.model_dump(mode="json")), int(body.enabled),
-            next_run(body.cron, body.timezone) if body.enabled else None, sid))
-    return {"ok": True}
-
-
 @app.delete("/api/schedules/{sid}")
-def delete_schedule(sid: str):
-    with submit_lock, store.db() as conn:
-        row = conn.execute("SELECT running FROM schedules WHERE id=?", (sid,)).fetchone()
-        if row and row[0]:
-            raise ValueError("此定时搜索正在运行，请先在历史中取消搜索。")
-        conn.execute("DELETE FROM schedules WHERE id=?", (sid,))
-    return {"ok": True}
+def retired_schedules(sid: str | None = None):
+    raise HTTPException(410,"定时搜索已移除。")

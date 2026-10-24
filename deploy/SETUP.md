@@ -43,7 +43,7 @@ On PowerShell, set those environment values with `$env:OSRM_AUTO_DOWNLOAD="0"` a
 
 ## Native macOS / Linux
 
-Automatic mode requires installed OSRM binaries and car.lua. With Homebrew OSRM installed, `./run.sh` can now download and prepare missing regions itself; no manual graph is required. To reuse a fixed graph instead, use one prepared with the same binary version. On macOS Homebrew: `brew install osrm-backend` (verify current installation requirements with Homebrew). Prepare a new extract directory with `osrm-extract -p /path/to/car.lua osrm-data/map.osm.pbf`, then `osrm-partition osrm-data/map.osrm` and `osrm-customize osrm-data/map.osrm`. The Lua profile is part of your OSRM installation; locate it rather than guessing its installed prefix.
+Automatic mode requires installed OSRM binaries and car.lua. With Homebrew OSRM installed, `./run.sh` can now download and prepare missing regions itself; no manual graph is required. To reuse a fixed graph instead, use one prepared with the same binary version. On macOS Homebrew: `brew install osrm-backend osmium-tool` (verify current installation requirements with Homebrew). Prepare a new extract directory with `osrm-extract -p /path/to/car.lua osrm-data/map.osm.pbf`, then `osrm-partition osrm-data/map.osrm` and `osrm-customize osrm-data/map.osrm`. The Lua profile is part of your OSRM installation; locate it rather than guessing its installed prefix.
 
 ```sh
 ./scripts/start-osrm.sh /absolute/path/to/map.osrm
@@ -76,7 +76,7 @@ Open the HTTPS URL reported by Tailscale on the phone. Keep this private to auth
 
 ## Local location discovery
 
-`DISCOVERY_SOURCE=local` is the default. Search reuses downloaded routing PBF source files and downloads only missing covering regions into private data/osm-extracts. It checks coverage of the whole selected area, reads actual mapped company/shop features, and caches region/area results. First reads can take minutes; repeats use cached features. Separate NY and NJ extracts can cover a cross-state search without downloading the whole Northeast. This is location discovery; an actual driving batch must still have an OSRM graph covering its exact matrix points. The default download ceiling also applies to discovery extracts. Map snapshot dates are saved in JSON.
+`DISCOVERY_SOURCE=local` is the default. Search reuses downloaded routing PBF source files and downloads only missing covering regions into private data/osm-extracts. It checks coverage of the whole selected area, reads actual mapped company/shop features, and caches region/area results. With osmium-tool, native smart extraction first reduces the area before Python geometry work. Docker includes it; native installs should add it for speed. Python-only fallback remains compatible but slower. First regional downloads/road preparation can still take minutes; repeats use cached features. Separate NY and NJ extracts can cover a cross-state search without downloading the whole Northeast. This is location discovery; an actual driving batch must still have an OSRM graph covering its exact matrix points. The default download ceiling also applies to discovery extracts. Map snapshot dates are saved in JSON.
 
 Set `DISCOVERY_SOURCE=overpass` only when you want the old public/live query path; provider limits and checkpoints remain. Road preparation after a completed search now prefetches only origin + the first batch, instead of every destination in a wide search.
 
@@ -97,8 +97,18 @@ Drawing-mode constraint: the confirmed initial starting pin must be covered by t
 
 Native sharing: supported iPhone browsers open the built-in sheet directly on the stop Share click, using an immediate Google /maps/place destination URL before awaiting any network. Physical-device behavior still requires verification. Repeated map searches can use a fifteen-minute raw-data cache; fresh public service requests can be delayed/rate-limited. The UI shows real stage/elapsed information, and Retry-After is respected.
 
-Backups: stop the planner before copying its entire data directory (SQLite, exports, checkpoints and schedules share the database). In Compose, `docker compose stop planner`, then use a temporary `planner-data` volume mount with `docker compose run --rm --no-deps --user 0 -v ./backups:/backup planner python -c "import shutil; shutil.make_archive('/backup/planner-data', 'gztar', '/app/data')"`. Keep backups private, restart with `docker compose up -d planner`, and verify the archive before deleting anything. Restore only while the planner is stopped, into the same volume, preserving ownership for UID 10001; retain the current data as a rollback copy first. Map graphs are reproducible from their extract and pinned OSRM version, but save the download receipt/config too.
+Backups: stop the planner before copying its entire data directory (SQLite, exports, checkpoints, outreach refusals and archived schedules share the database). In Compose, `docker compose stop planner`, then use a temporary `planner-data` volume mount with `docker compose run --rm --no-deps --user 0 -v ./backups:/backup planner python -c "import shutil; shutil.make_archive('/backup/planner-data', 'gztar', '/app/data')"`. Keep backups private, restart with `docker compose up -d planner`, and verify the archive before deleting anything. Restore only while the planner is stopped, into the same volume, preserving ownership for UID 10001; retain the current data as a rollback copy first. Map graphs are reproducible from their extract and pinned OSRM version, but save the download receipt/config too.
 
 ## Continuous-route update
 
 New trips now use continuous_routing.py to make one whole-area road-aware heuristic plan (one-second improvement budget, 500-stop limit) and persist its order before splitting batches. Matrix requests are blocked below the default OSRM 100-input limit. Existing routes are not rewritten; use the copy/replan action. Each new batch retains its planned end; <=12 stops are exact only with those fixed endpoints. Road-uncovered locations remain flagged in a geographic suffix and need the correct graph when calculating their batches. No global-optimality or real-time-traffic claim is made. New continuous trips do not return to the original start.
+
+## Outreach update
+
+Use real premises containing at least two mapped businesses/practices as worker drop-off clusters. Keep plausible unverified poster/flyer candidates, including ordinary chains; exclude the configured big shops/malls and explicit locally recorded refusals. Do not present unknown policies as approval. Refusal records are reversible under “已确认拒收”; saved history/routes are not rewritten.
+
+“下一趟地点数” accepts 1–15 new destinations for each new batch and defaults to the previous requested size. A short final batch does not overwrite that preference. Fixed start/end continuity and uniqueness constraints remain.
+
+Scheduled search UI/background dispatch are removed. Existing schedules are archived/disabled on startup; writes to retired endpoints return 410. No automatic recurring searches should run.
+
+Download and processing ETAs describe their labelled phase, based on observed bandwidth/local timing records. Unknown first-run times remain unknown; do not promise a worldwide cold download/build under one minute.

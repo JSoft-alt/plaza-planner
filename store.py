@@ -46,6 +46,8 @@ def init():
         CREATE TABLE IF NOT EXISTS schedules (
             id TEXT PRIMARY KEY, payload TEXT NOT NULL, enabled INTEGER NOT NULL,
             next_run REAL, running TEXT, last_outcome TEXT);
+        CREATE TABLE IF NOT EXISTS outreach_declines (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, recorded REAL NOT NULL);
         """)
 
 
@@ -120,7 +122,9 @@ def trip_start(scan, trip):
     return dict(endpoint, previous_trip_id=previous["id"], previous_trip_number=previous["number"])
 
 
-def new_trip(sid):
+def new_trip(sid, batch_size=None):
+    if batch_size is not None and (type(batch_size) is not int or not 1 <= batch_size <= 15):
+        raise ValueError('每趟须为 1–15 个新地点。')
     # Transaction and unique membership make concurrent clicks and refresh safe.
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -139,16 +143,42 @@ def new_trip(sid):
         queue = scan.get('route_plan',{}).get('order') or [p['id'] for p in scan['plazas']]
         if len(queue)!=len(scan['plazas']) or set(queue)!={p['id'] for p in scan['plazas']}:
             raise ValueError('保存的访问顺序不完整，请重新规划。')
-        chosen = [pid for pid in queue if pid not in assigned][:scan["config"]["batch_size"]]
+        size=batch_size if batch_size is not None else scan.get('last_batch_size',scan['config']['batch_size'])
+        declined={r[0] for r in conn.execute('SELECT id FROM outreach_declines')}
+        by_id={p['id']:p for p in scan['plazas']}
+        def eligible(pid):
+            place=by_id[pid]
+            if pid in declined or place.get('company_count',place.get('shop_count',2))<2:return False
+            tenants=set(place.get('provenance',{}).get('eligible_ids',[]))
+            minimum=max(2,scan['config'].get('min_companies' if scan['config'].get('discovery_kind')=='offices' else 'min_shops',2))
+            return not tenants or len(tenants-declined)>=minimum
+        chosen = [pid for pid in queue if pid not in assigned and eligible(pid)][:size]
         if not chosen:
-            raise ValueError("所有地点均已分趟。")
+            raise ValueError("没有剩余候选地点；已分趟、明确拒收或单商户地点会跳过。")
         tid = uid()
         number = existing["number"] + 1 if existing else 1
         start = trip_start(scan, dict(number=number))
         conn.execute("INSERT INTO trips VALUES (?,?,?,?)", (tid, sid, number,
-                     dump(dict(plaza_ids=chosen, start=start, route=None, error=None))))
+                     dump(dict(plaza_ids=chosen, start=start, batch_size=size, route=None, error=None))))
         conn.executemany("INSERT INTO assignments VALUES (?,?,?)", [(sid, pid, tid) for pid in chosen])
+        scan.pop('trips',None)
+        scan['last_batch_size']=size
+        conn.execute('UPDATE scans SET payload=? WHERE id=?',(dump(scan),sid))
     return tid
+
+
+def outreach_declines():
+    if not (DATA/'planner.sqlite3').exists():return []
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='outreach_declines'").fetchone():return []
+        return [dict(r) for r in conn.execute('SELECT * FROM outreach_declines ORDER BY recorded DESC')]
+
+
+def set_outreach_decline(pid, name, declined=True):
+    with db() as conn:
+        if declined:
+            conn.execute('INSERT OR REPLACE INTO outreach_declines VALUES (?,?,?)',(pid,name,time.time()))
+        else:conn.execute('DELETE FROM outreach_declines WHERE id=?',(pid,))
 
 
 def update_trip(sid, tid, **changes):

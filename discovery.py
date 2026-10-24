@@ -107,10 +107,19 @@ def qualify(elements, config, rules=None):
     offices = config.discovery_kind == "offices"
     rules = rules or json.loads((OFFICE_RULES if offices else RULES).read_text(encoding="utf-8"))
     rules_hash = hashlib.sha256(store.dump(rules).encode()).hexdigest()
+    declined={p['id'] for p in store.outreach_declines()}
     area, forward, inverse = config.area()
     shops, outlines, excluded_areas = [], [], []
     for element in elements:
         tags = element.get("tags", {})
+        pid = f"{element['type']}:{element['id']}"
+        if pid in declined:
+            # A refusal is attached to the actual mapped premise, not inferred
+            # from its category or applied to unrelated neighboring businesses.
+            refused_shape=geometry(element)
+            if refused_shape is not None and refused_shape.geom_type in ('Polygon','MultiPolygon'):
+                excluded_areas.append(transform(forward,refused_shape))
+            continue
         kind = category(tags, rules)
         is_mall = tags.get("shop") == "mall" or tags.get("building") in ("shopping_centre", "shopping_center")
         office_outline = tags.get("building", "no") not in ("no", "roof", "construction", "ruins") or tags.get("landuse") == "commercial" or bool(kind)
@@ -136,7 +145,7 @@ def qualify(elements, config, rules=None):
             if area.covers(point):
                 priority = (2 if tags.get("landuse") == "commercial" else 0 if tags.get("building") else 1) if offices else (0 if is_mall else 1 if tags.get("landuse") == "retail" else 2)
                 outlines.append(dict(id=pid, tags=tags, geometry=metric, point=point, priority=priority))
-    if not offices and excluded_areas:
+    if excluded_areas:
         blocked = STRtree(excluded_areas)
         shops = [shop for shop in shops if not any(excluded_areas[int(i)].covers(shop['point']) for i in blocked.query(shop['point']))]
     # Nodes and building footprints often describe the same storefront. Use a
@@ -169,19 +178,12 @@ def qualify(elements, config, rules=None):
     tree = STRtree([s["point"] for s in shops])
     candidates = []
     for outline in outlines:
-        if not offices and any(zone.covers(outline['point']) for zone in excluded_areas):
+        if any(zone.covers(outline['point']) for zone in excluded_areas):
             continue
         inside = [shops[int(i)] for i in tree.query(outline["geometry"]) if (offices or shops[int(i)]["id"] != outline["id"])
                   and outline["geometry"].covers(shops[int(i)]["point"])]
-        if len(inside) >= (config.min_companies if offices else config.min_shops):
+        if len(inside) >= max(2,rules.get('minimum_cluster_size',2),config.min_companies if offices else config.min_shops):
             candidates.append(outline | {"shops": inside, "ids": {s["id"] for s in inside}})
-    if offices and config.min_companies == 1:
-        # A mapped standalone practice/hospital is useful even without a building
-        # footprint. It is one organization, never a fabricated nearby cluster.
-        outline_tree = STRtree([o["geometry"] for o in outlines])
-        for company in shops:
-            if area.covers(company["point"]) and not any(outlines[int(i)]["geometry"].covers(company["point"]) for i in outline_tree.query(company["point"])):
-                candidates.append(company | dict(priority=3, shops=[company], ids={company["id"]}))
     candidates.sort(key=lambda c: (c["priority"], -len(c["ids"]), -c["geometry"].area, c["id"]))
     kept = []
     for candidate in candidates:
@@ -204,7 +206,7 @@ def qualify(elements, config, rules=None):
         fallback_name = {"office_zone": "未命名办公区", "building": "未命名办公 / 医疗楼", "facility": "未命名机构", "retail": "未命名商业区"}[entity_kind]
         plazas.append(dict(id=item["id"], name=name or fallback_name, address=plaza_address or "地址未映射",
                            lat=lat, lng=lng, **({"company_count": len(item["shops"]), "entity_kind": entity_kind} if offices else {"shop_count": len(item["shops"])}),
-                           provenance={"source": "OpenStreetMap", "outline": item["id"],
+                           outreach_status='unverified',provenance={"source": "OpenStreetMap", "outline": item["id"],
                                        "eligible_ids": sorted(item["ids"]), "rules_hash": rules_hash,
                                        "destination": "已映射机构位置或边界内点；并非已验证入口" if offices else "商业区边界内点；并非已验证入口"}))
     return sweep(plazas, config)

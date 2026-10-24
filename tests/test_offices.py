@@ -49,7 +49,7 @@ class Offices(unittest.TestCase):
     def test_standalone_hospital_counts_once_and_nearby_nodes_are_not_clustered(self):
         results=discovery.qualify(fixture(),config(min_companies=1))
         counts={r['id']:r['company_count'] for r in results}
-        self.assertEqual(counts,{'way:1':4,'way:2':1,'node:40':1,'node:41':1})
+        self.assertEqual(counts,{'way:1':4})
         self.assertNotIn('way:3',counts)
 
     def test_office_zone_uses_mapped_boundary(self):
@@ -66,9 +66,9 @@ class Offices(unittest.TestCase):
         self.assertEqual(discovery.qualify(elements,config())[0]['company_count'],2)
 
     def test_rules_include_other_companies_without_retail_chain_exclusions(self):
-        elements=fixture()[:1]+[fixture()[1]]
+        elements=fixture()[:3]
         elements[1]['tags']={'office':'company','brand':'Apple','name':'Apple Office'}
-        self.assertEqual(discovery.qualify(elements,config(min_companies=1))[0]['company_count'],1)
+        self.assertEqual(discovery.qualify(elements,config(min_companies=2))[0]['company_count'],2)
 
     def test_legacy_configuration_and_strict_minimum(self):
         legacy=config().model_dump();legacy.pop('discovery_kind');legacy.pop('min_companies')

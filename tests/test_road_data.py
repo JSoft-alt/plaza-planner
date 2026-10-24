@@ -33,6 +33,20 @@ class RegionSelection(unittest.TestCase):
 
 
 class Provisioning(unittest.TestCase):
+    def test_routing_reuses_discovery_source_without_another_download(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(store,'DATA',Path(folder)):
+            source=store.DATA/'osm-extracts/region';source.mkdir(parents=True)
+            url='https://download.geofabrik.de/test-latest.osm.pbf'
+            (source/'map.osm.pbf').write_bytes(b'cached source')
+            store.atomic_json(source/'ready.json',dict(region_id='test',source=url))
+            manager=road_data.Manager('http://127.0.0.1:1')
+            manager.jobs['test']=dict(region_id='test',phase='queued')
+            target=manager.root/'test';target.mkdir()
+            try:
+                with patch.object(road_data.requests,'get',side_effect=AssertionError('Must reuse the source')):
+                    found=manager.download('test',url,target)
+                self.assertEqual(found.read_bytes(),b'cached source')
+            finally:manager.pool.shutdown()
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='road data with spaces ')
         self.old=store.DATA;store.DATA=Path(self.temp.name)

@@ -18,7 +18,7 @@ class RetailDestinations(unittest.TestCase):
         self.assertEqual(results[0]['shop_count'],2)
 
     def test_explicit_big_mall_and_big_box_destinations_are_excluded(self):
-        for name in ['American Dream','Americana Manhasset',"Macy's",'Macys','Target','Walmart','Home Depot',"Lowe's",'Lowes',"Sam's Club",'Sams Club']:
+        for name in ['American Dream','Americana Manhasset','Queens Place',"Macy's",'Macys','Target','Walmart','Home Depot',"Lowe's",'Lowes',"Sam's Club",'Sams Club']:
             with self.subTest(name=name):
                 data=self.sample();data[0]['tags']['name']=name
                 self.assertEqual(discovery.qualify(data,config(diameter_miles=1)),[])

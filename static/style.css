@@ -899,3 +899,14 @@
 .discovery-tabs button{background:transparent;border-color:transparent;min-height:46px;padding:10px 20px;color:var(--muted)}
 .discovery-tabs button[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:#fff}
 @media(max-width:560px){.discovery-tabs{gap:4px;margin-bottom:18px}.discovery-tabs button{flex:1;padding:10px 12px}}
+
+/* Outreach controls stay secondary to the place and route. */
+.next-batch input{width:88px;min-height:42px;padding:8px;border:1px solid var(--line);border-radius:7px;background:white}
+.plaza h3{display:flex;align-items:center;gap:8px}
+.place-options{position:relative;margin-left:auto;font-weight:400}
+.place-options summary{cursor:pointer;list-style:none;padding:4px 8px;min-width:36px;text-align:center;color:var(--muted)}
+.place-options summary::-webkit-details-marker{display:none}
+.place-options button{position:absolute;right:0;z-index:3;background:white;box-shadow:0 4px 16px #172d2818;font-size:13px;white-space:nowrap}
+.plaza.declined{opacity:.5}
+.decline-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
+.trip-controls>.next-batch{flex:0 0 108px;width:auto}

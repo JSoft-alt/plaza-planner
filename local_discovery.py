@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 from threading import Lock
 import time
 from urllib.parse import urlsplit
@@ -15,15 +16,17 @@ from urllib.parse import urlsplit
 import osmium
 import requests
 from shapely import from_wkb
-from shapely.geometry import Point, box, mapping, shape
+from shapely.geometry import Point, Polygon, box, mapping, shape
 from shapely.ops import transform, unary_union
 from shapely.strtree import STRtree
 
 import store
+import estimates
 
 CATALOG = 'https://download.geofabrik.de/index-v1.json'
 USER_AGENT = 'PlazaPlanner/1.0 (+https://github.com/JSoft-alt/plaza-planner)'
 _reader_lock = Lock()
+_source_lock = Lock()
 
 
 def check(cancelled):
@@ -80,6 +83,12 @@ def catalog(activity):
 
 
 def source_file(region, activity, cancelled):
+    while not _source_lock.acquire(timeout=.2):check(cancelled)
+    try:return _source_file(region,activity,cancelled)
+    finally:_source_lock.release()
+
+
+def _source_file(region, activity, cancelled):
     props = region['properties']
     # Only this app's own caches are read. Do not touch the older deployment.
     for root in (store.DATA/'routing',store.DATA/'osm-extracts'):
@@ -117,7 +126,8 @@ def source_file(region, activity, cancelled):
                     raise ValueError('区域地图下载超时，可重试；已有地图保留。')
                 output.write(chunk)
                 if time.monotonic()-reported >= .5:
-                    activity(phase='local_download',provider=props['id'],bytes=count,total_bytes=total or None)
+                    activity(phase='local_download',provider=props['id'],bytes=count,total_bytes=total or None,
+                             eta_seconds=estimates.download_eta(count,total,time.monotonic()-started),eta_scope='下载')
                     reported = time.monotonic()
         if not count or (total and count != total):
             raise ValueError('区域地图下载不完整，请重试。')
@@ -127,13 +137,149 @@ def source_file(region, activity, cancelled):
     return pbf
 
 
+def read_features(pbf, bounds, config, activity, cancelled):
+    """Read relevant ways directly; assemble only tagged multipolygon relations.
+
+    AreaManager assembles millions of unrelated closed ways before iterator
+    filters run. A direct way geometry avoids that work and the second full
+    business/building area pass. Relation member geometry stays exact.
+    """
+    import discovery
+    offices=config.discovery_kind=='offices'
+    keys=('office','healthcare','amenity','building','landuse') if offices else ('shop','amenity','sport','healthcare','beauty','cuisine','building','landuse')
+    envelope=box(*bounds);factory=osmium.geom.WKBFactory()
+    def relevant(tags):
+        if offices:
+            return bool(tags.get('office') or tags.get('healthcare') or tags.get('amenity') in ('hospital','clinic','dentist','doctors') or
+                        tags.get('building','no') not in ('no','roof','construction','ruins') or tags.get('landuse')=='commercial')
+        return bool(tags.get('shop') or tags.get('sport') or tags.get('beauty') or tags.get('cuisine') or
+                    tags.get('healthcare')=='acupuncture' or tags.get('amenity') in
+                    ('restaurant','cafe','fast_food','pharmacy','car_wash','food_court','ice_cream','bar','pub','library','community_centre','arts_centre','music_school','language_school','training','bank') or
+                    tags.get('building') in ('retail','shopping_centre','shopping_center') or tags.get('landuse')=='retail')
+    def office_business(tags):
+        return bool(tags.get('office') or tags.get('healthcare') or tags.get('amenity') in ('hospital','clinic','dentist','doctors'))
+    activity(phase='local_read',elements=0)
+    relations=[];member_ids=set()
+    for obj in osmium.FileProcessor(str(pbf),osmium.osm.RELATION).with_filter(osmium.filter.KeyFilter(*keys)):
+        check(cancelled)
+        if obj.tags.get('type')!='multipolygon' or not relevant(obj.tags):continue
+        members=[(m.ref,m.role) for m in obj.members if m.type=='w' and m.role in ('','outer','inner')]
+        relations.append((obj.id,dict(obj.tags),obj.version,members));member_ids.update(ref for ref,_ in members)
+    members={};result={};seen=0;reported=time.monotonic()
+    primary_keys=('office','healthcare','amenity') if offices else keys
+    processor=osmium.FileProcessor(str(pbf)).with_locations('flex_mem').with_filter(osmium.filter.KeyFilter(*primary_keys))
+    snapshot=processor.header.get('osmosis_replication_timestamp')
+    for obj in processor:
+        seen+=1
+        if seen%1024==0:
+            check(cancelled)
+            if time.monotonic()-reported>=1:
+                activity(phase='local_read',elements=seen);reported=time.monotonic()
+        if obj.is_relation():continue
+        member=obj.is_way() and obj.id in member_ids
+        if not member and not (office_business(obj.tags) if offices else relevant(obj.tags)):continue
+        if obj.is_node():
+            if not obj.location.valid() or not (bounds[0]<=obj.lon<=bounds[2] and bounds[1]<=obj.lat<=bounds[3]):continue
+            geom=Point(obj.lon,obj.lat);typ='node'
+        elif obj.is_way():
+            try:line=from_wkb(factory.create_linestring(obj))
+            except (RuntimeError,osmium.InvalidLocationError):continue
+            if member:members[obj.id]=list(line.coords)
+            if not (office_business(obj.tags) if offices else relevant(obj.tags)):continue
+            geom=Polygon(line.coords) if obj.nodes.is_closed() and len(obj.nodes)>=4 else line
+            typ='way'
+        else:continue
+        if geom.is_empty or not geom.is_valid or not envelope.intersects(geom):continue
+        result[f'{typ}:{obj.id}']=dict(type=typ,id=obj.id,tags=dict(obj.tags),version=obj.version,geojson=mapping(geom))
+    del processor
+    missing=member_ids-members.keys()
+    if missing:
+        # Only untagged relation members need this cheap reference pass. Never
+        # infer a multipolygon from just the tagged members or fill its holes.
+        activity(phase='local_relations',elements=len(missing))
+        for obj in (osmium.FileProcessor(str(pbf)).with_locations('flex_mem')
+                    .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
+                    .with_filter(osmium.filter.IdFilter(missing))):
+            check(cancelled)
+            try:members[obj.id]=list(from_wkb(factory.create_linestring(obj)).coords)
+            except (RuntimeError,osmium.InvalidLocationError):continue
+    for pid,tags,version,refs in relations:
+        check(cancelled)
+        if any(ref not in members for ref,_ in refs):continue
+        item=dict(type='relation',id=pid,tags=tags,version=version,members=[dict(type='way',role=role or 'outer',geometry=[dict(lon=x,lat=y) for x,y in members[ref]]) for ref,role in refs])
+        geom=discovery.geometry(item)
+        if geom is not None and not geom.is_empty and geom.is_valid and envelope.intersects(geom):
+            item.pop('members');item['geojson']=mapping(geom);result[f'relation:{pid}']=item
+    if offices:
+        # Dense cities have hundreds of thousands of residential footprints.
+        # Match them against real business points before retaining/serializing;
+        # don't turn a 10-mile medical search into a housing inventory.
+        points=[discovery.geometry(item).representative_point() for item in result.values() if office_business(item['tags'])]
+        tree=STRtree(points)
+        def occupied(geom):
+            return geom.is_valid and any(geom.covers(points[int(i)]) for i in tree.query(geom))
+        result={pid:item for pid,item in result.items() if office_business(item['tags']) or occupied(discovery.geometry(item))}
+        activity(phase='local_buildings',businesses=len(points),elements=0)
+        seen=0;reported=time.monotonic()
+        for obj in (osmium.FileProcessor(str(pbf)).with_locations('flex_mem')
+                    .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
+                    .with_filter(osmium.filter.KeyFilter('building','landuse'))):
+            seen+=1
+            if seen%4096==0:
+                check(cancelled)
+                if time.monotonic()-reported>=1:
+                    activity(phase='local_buildings',businesses=len(points),elements=seen);reported=time.monotonic()
+            if not relevant(obj.tags) or not obj.nodes.is_closed() or len(obj.nodes)<4:continue
+            try:geom=Polygon(from_wkb(factory.create_linestring(obj)).coords)
+            except (RuntimeError,osmium.InvalidLocationError):continue
+            if not occupied(geom):continue
+            pid=f'way:{obj.id}'
+            result[pid]=dict(type='way',id=obj.id,tags=dict(obj.tags),version=obj.version,geojson=mapping(geom))
+    check(cancelled)
+    if len(result)>100000:raise ValueError('本区域地点过多，请缩小范围。')
+    activity(phase='local_filter',elements=len(result))
+    return list(result.values()),snapshot
+
+
+def compact_source(pbf,bounds,activity,cancelled):
+    """Use osmium's native spatial extraction before Python geometry work."""
+    binary=shutil.which('osmium')
+    if not binary:return pbf
+    fingerprint=hashlib.sha256(store.dump(dict(path=str(pbf.resolve()),size=pbf.stat().st_size,
+        modified=pbf.stat().st_mtime_ns,bounds=list(bounds))).encode()).hexdigest()
+    directory=store.DATA/'local-extract-cache';directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+    target=directory/(fingerprint+'.osm.pbf')
+    if target.exists():return target
+    partial=directory/(fingerprint+'.part.osm.pbf');started=time.monotonic()
+    activity(phase='local_clip',elements=0)
+    with (directory/(fingerprint+'.log')).open('wb') as log:
+        process=subprocess.Popen([binary,'extract','--bbox',','.join(map(str,bounds)),'--strategy','smart',
+            '--output-header=osmosis_replication_timestamp!','--overwrite','--output',str(partial),str(pbf)],stdout=log,stderr=log)
+        try:
+            while process.poll() is None:
+                check(cancelled)
+                if time.monotonic()-started>300:raise ValueError('本机地图裁剪超时，请缩小范围后重试。')
+                time.sleep(.1)
+            if process.returncode:raise ValueError('本机地图裁剪失败，请检查磁盘及 local-extract-cache 日志。')
+            check(cancelled);partial.replace(target)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:process.wait(timeout=5)
+                except subprocess.TimeoutExpired:process.kill();process.wait()
+            partial.unlink(missing_ok=True)
+    # Cache is disposable, never user history. Bound disk growth across areas.
+    for old in sorted(directory.glob('*.osm.pbf'),key=lambda p:p.stat().st_mtime,reverse=True)[12:]:
+        old.unlink(missing_ok=True);old.with_name(old.name.replace('.osm.pbf','.log')).unlink(missing_ok=True)
+    return target
+
+
 def extract(pbf, bounds, config, rules, activity, cancelled):
     stat = pbf.stat()
     common=dict(path=str(pbf.resolve()),size=stat.st_size,modified=stat.st_mtime_ns,bounds=list(bounds),kind=config.discovery_kind)
-    fingerprint = hashlib.sha256(store.dump(dict(version=2,**common)).encode()).hexdigest()
+    fingerprint = hashlib.sha256(store.dump(dict(version=3,**common)).encode()).hexdigest()
     cache = store.DATA/'local-map-cache'/(fingerprint+'.json')
-    legacy = cache.with_name(hashlib.sha256(store.dump(dict(version=1,**common,rules=rules)).encode()).hexdigest()+'.json')
-    available=cache if cache.exists() else legacy
+    available=cache
     if available.exists():
         try:
             saved = json.loads(available.read_text(encoding='utf-8'))
@@ -141,96 +287,15 @@ def extract(pbf, bounds, config, rules, activity, cancelled):
                 activity(phase='local_cache',provider=pbf.parent.name,elements=len(saved['elements']))
                 return saved['elements'], saved.get('snapshot')
         except (OSError,ValueError,KeyError,TypeError):pass
-    offices = config.discovery_kind == 'offices'
-    keys = ('office','healthcare','amenity') if offices else ('shop','amenity','sport','healthcare','beauty','cuisine')
-    envelope = box(*bounds)
-    factory = osmium.geom.WKBFactory()
-    businesses = []
-    seen = 0; reported = time.monotonic()
-    activity(phase='local_companies',provider=pbf.parent.name,elements=0)
-    processor = (osmium.FileProcessor(str(pbf)).with_locations('flex_mem')
-                 .with_areas(osmium.filter.KeyFilter(*keys))
-                 .with_filter(osmium.filter.KeyFilter(*keys)))
-    snapshot = processor.header.get('osmosis_replication_timestamp')
-
-    def decode(obj):
-        if obj.is_node():
-            if not obj.location.valid():return None
-            return Point(obj.lon,obj.lat),'node',obj.id
-        if obj.is_way():
-            if obj.nodes.is_closed():return None
-            return from_wkb(factory.create_linestring(obj)),'way',obj.id
-        if obj.is_area():
-            return from_wkb(factory.create_multipolygon(obj)),('way' if obj.from_way() else 'relation'),obj.orig_id()
-        return None
-
-    for obj in processor:
-        seen += 1
-        if seen % 1024 == 0:
-            check(cancelled)
-            if time.monotonic()-reported >= 1:
-                activity(phase='local_companies',provider=pbf.parent.name,elements=seen)
-                reported=time.monotonic()
-        if obj.is_relation():continue
-        if offices and not (obj.tags.get('office') or obj.tags.get('healthcare') or obj.tags.get('amenity') in ('hospital','clinic','dentist','doctors')):
-            continue
-        if not offices and not (obj.tags.get('shop') or obj.tags.get('sport') or obj.tags.get('beauty') or obj.tags.get('cuisine') or obj.tags.get('healthcare')=='acupuncture' or obj.tags.get('amenity') in ('restaurant','cafe','fast_food','pharmacy','car_wash')):
-            continue
-        if obj.is_node():
-            if not obj.location.valid() or not (bounds[0] <= obj.lon <= bounds[2] and bounds[1] <= obj.lat <= bounds[3]):
-                continue
-        if obj.is_way() and obj.nodes.is_closed():continue
-        tags=dict(obj.tags)
-        try:decoded=decode(obj)
-        except (RuntimeError,osmium.InvalidLocationError):continue
-        if decoded is None:continue
-        geom,typ,pid=decoded
-        if geom.is_empty or not geom.is_valid or not envelope.intersects(geom):continue
-        businesses.append((dict(type=typ,id=pid,tags=tags,version=obj.version,geojson=mapping(geom)),geom))
-    del processor
-    check(cancelled)
-    kept={f"{item['type']}:{item['id']}":item for item,_ in businesses}
-    if not businesses:
-        store.atomic_json(cache,dict(elements=[],snapshot=snapshot))
-        return [],snapshot
-    points=[geom.representative_point() for _,geom in businesses]
-    tree=STRtree(points)
-    # A second C++-filtered pass emits only polygons. Do not retain a million
-    # unrelated houses: keep a footprint only if it contains a mapped business.
-    activity(phase='local_buildings',provider=pbf.parent.name,elements=0,businesses=len(businesses))
-    processor=(osmium.FileProcessor(str(pbf)).with_locations('flex_mem')
-        .with_areas(osmium.filter.KeyFilter('building','landuse','shop'))
-        .with_filter(osmium.filter.EntityFilter(osmium.osm.AREA))
-        .with_filter(osmium.filter.KeyFilter('building','landuse','shop')))
-    seen=0;reported=time.monotonic()
-    for obj in processor:
-        seen+=1
-        if seen % 4096==0:
-            check(cancelled)
-            if time.monotonic()-reported>=1:
-                activity(phase='local_buildings',provider=pbf.parent.name,elements=seen,businesses=len(businesses))
-                reported=time.monotonic()
-        building=obj.tags.get('building','no')
-        landuse=obj.tags.get('landuse','')
-        mall=obj.tags.get('shop','')=='mall' or building in ('shopping_centre','shopping_center')
-        if offices:
-            if building in ('no','roof','construction','ruins') and landuse!='commercial':continue
-        elif not (mall or building=='retail' or landuse=='retail'):continue
-        try:geom=from_wkb(factory.create_multipolygon(obj))
-        except (RuntimeError,osmium.InvalidLocationError):continue
-        candidates=tree.query(geom)
-        if not len(candidates):continue
-        if not geom.is_valid or not any(geom.covers(points[int(i)]) for i in candidates):continue
-        typ='way' if obj.from_way() else 'relation';pid=obj.orig_id()
-        item=dict(type=typ,id=pid,tags=dict(obj.tags),version=obj.version,geojson=mapping(geom))
-        kept[f"{typ}:{pid}"]=item
-    del processor
-    check(cancelled)
-    activity(phase='local_filter',elements=seen,businesses=len(businesses),outlines=len(kept))
-    result = list(kept.values())
-    if len(result) > 100000:
-        raise ValueError('本区域地点过多，请缩小范围。')
-    store.atomic_json(cache,dict(elements=result,snapshot=snapshot))
+    key=f'local:{config.discovery_kind}:{pbf.stat().st_size}'
+    expected=estimates.expected(key);started=time.monotonic()
+    def report(**event):
+        left=expected-(time.monotonic()-started) if expected else None
+        activity(**event,eta_seconds=round(left) if left and left>0 else None,eta_scope='地图处理')
+    source=compact_source(pbf,bounds,report,cancelled)
+    result,snapshot = read_features(source,bounds,config,report,cancelled)
+    estimates.record(key,time.monotonic()-started)
+    store.atomic_json(cache,dict(elements=result,snapshot=snapshot,bounds=list(bounds),kind=config.discovery_kind,version=3))
     for old in sorted(cache.parent.glob('*.json'),key=lambda p:p.stat().st_mtime,reverse=True)[64:]:
         old.unlink(missing_ok=True)
     return result,snapshot

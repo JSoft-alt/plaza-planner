@@ -65,7 +65,7 @@ For a PC that already provides a compatible **local OSRM service**, install **64
 .\run-native-windows.cmd
 ```
 
-The launcher creates `.venv-windows`, installs dependencies once (again after requirements change), and starts a single Uvicorn worker bound to `127.0.0.1:8011`. It does not activate PowerShell environments or modify global Python packages. Python 3.11–3.14 x64 is accepted; dependency resolution was checked for Windows CPython 3.12 x64. Keep its terminal open; Ctrl+C stops the native app. Native data defaults to this folder's `data\`; `PLANNER_DATA_DIR` can point to a different writable folder. Config files are UTF-8; Notepad's optional UTF-8 BOM is supported for `.env`. Time-zone data is included in Python requirements for scheduled searches.
+The launcher creates `.venv-windows`, installs dependencies once (again after requirements change), and starts a single Uvicorn worker bound to `127.0.0.1:8011`. It does not activate PowerShell environments or modify global Python packages. Python 3.11–3.14 x64 is accepted; dependency resolution was checked for Windows CPython 3.12 x64. Keep its terminal open; Ctrl+C stops the native app. Native data defaults to this folder's `data\`; `PLANNER_DATA_DIR` can point to a different writable folder. Config files are UTF-8; Notepad's optional UTF-8 BOM is supported for `.env`. Time-zone data remains included for compatibility with archived records.
 
 Set `.env` for your existing local OSRM, for example:
 
@@ -83,6 +83,6 @@ The native Python launcher does **not** bundle a native Windows OSRM engine. Wit
 - **Source folder has spaces/non-ASCII characters:** launcher paths are passed as arguments and WSL paths are translated using `wslpath`; no shell evaluation is used. If moving to a different PC, extract fresh source rather than copying a Mac `.venv` or a Windows `.venv-windows`.
 - **PowerShell policy enforced by work/school:** follow your administrator's policy. The launcher does not override Group Policy.
 - **Road preparation fails:** inspect logs with the command above, available storage and Docker/WSL memory. Search/history remain saved. No public demo-routing fallback or paid server is used.
-- **App starts but OSM search is slow:** public Overpass availability is independent of Windows compatibility. Existing progress, timeout, cached retry and history still apply.
+- **App starts but OSM search is slow:** use the full container path, which includes osmium-tool for native area extraction. A Python-only installation without that tool uses a slower compatible reader. New regional downloads/OSRM preparation may exceed one minute; observed download/processing phase ETAs are shown when available.
 
 Qualification: source/dependency/launcher checks and actual app-process portability tests passed on macOS. The PowerShell launcher was executed with stubbed container commands under official PowerShell 7, not a real Windows Docker engine. The existing Windows host was unreachable during this change. Native Windows 5.1, WSL startup and container build/runtime have **not** been established by those checks. The manual `Checks` GitHub workflow now includes `windows-latest` and the actual app-process tests, but it has not been dispatched; running it may consume the repository's Actions quota. Do not describe these artifacts as a Windows-certified installer.

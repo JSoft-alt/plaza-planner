@@ -104,7 +104,7 @@ class Geography(unittest.TestCase):
 
     def test_rules(self):
         rules=json.loads(discovery.RULES.read_text())
-        for name in ["McDonald’s","Home Depot","Walmart","Starbucks","KFC","CVS"]:
+        for name in ["Home Depot","Walmart","Target","Macy’s"]:
             self.assertIsNone(discovery.category({"name":name,"shop":"convenience"},rules))
         for tags in [{"amenity":"restaurant","cuisine":"italian;pizza"},{"shop":"tattoo"},
                      {"sport":"yoga"},{"shop":"hardware"}]:
@@ -168,7 +168,7 @@ class Application(unittest.TestCase):
             files=list((store.DATA/'exports').glob('*.json'));self.assertTrue(files)
             self.assertEqual(json.loads(self.client.get(f'/api/scans/{sid}/export').content)['id'],sid)
 
-    def test_office_search_persists_kind_threshold_and_schedule(self):
+    def test_office_search_persists_kind_threshold_and_history(self):
         from test_offices import fixture as office_fixture
         c=config(discovery_kind='offices',min_companies=3,diameter_miles=1)
         rec=store.insert_scan(c.model_dump(mode='json'))
@@ -187,11 +187,6 @@ class Application(unittest.TestCase):
         self.assertEqual(export['config']['discovery_kind'],'offices')
         history=self.client.get('/api/history').json()['items']
         self.assertTrue(any(r['id']==rec['id'] and r['config']['min_companies']==3 for r in history))
-        response=self.client.post('/api/schedules',json=dict(name='Offices',config=c.model_dump(mode='json'),cron='0 9 * * *',timezone='America/New_York',enabled=False),headers=self.headers)
-        self.assertEqual(response.status_code,200,response.text)
-        saved_schedule=next(s for s in self.client.get('/api/schedules').json()['items'] if s['id']==response.json()['id'])
-        self.assertEqual(saved_schedule['config']['discovery_kind'],'offices')
-        self.assertEqual(saved_schedule['config']['min_companies'],3)
 
     def test_road_prefetch_uses_only_the_first_batch(self):
         sid=self.make_scan(count=20)
@@ -253,23 +248,15 @@ class Application(unittest.TestCase):
         for expression,tz in [('bad','UTC'),('0 9 * * *','No/Timezone'),('0 25 * * *','UTC')]:
             with self.assertRaises(ValidationError):ScheduleInput(name='test',config=config(),cron=expression,timezone=tz)
 
-    def test_schedule_crud_tick_overlap_and_clear_scope(self):
-        body=dict(name='Recurring test',config=config().model_dump(mode="json"),cron='0 9 * * *',timezone='America/New_York',enabled=True)
-        response=self.client.post('/api/schedules',json=body,headers=self.headers);self.assertEqual(response.status_code,200,response.text)
-        sid=response.json()['id']
-        with store.db() as conn:conn.execute('UPDATE schedules SET next_run=? WHERE id=?',(time.time()-1,sid))
-        with patch.object(app.pool,'submit') as submit:
-            app.schedule_tick();self.assertEqual(submit.call_count,1)
-            with store.db() as conn:conn.execute('UPDATE schedules SET next_run=? WHERE id=?',(time.time()-1,sid))
-            app.schedule_tick();self.assertEqual(submit.call_count,1)
-        running=next(s for s in app.schedules_list() if s['id']==sid)['running']
-        with patch.object(discovery,'run_scan',side_effect=lambda scan_id:store.update_scan(scan_id,status='complete')):
-            app.run(running,sid)
-        spec=next(s for s in app.schedules_list() if s['id']==sid)
-        self.assertIsNone(spec['running']);self.assertIn('完成',spec['last_outcome'])
-        self.assertEqual(self.client.put('/api/schedules/'+sid,json={**body,'enabled':False},headers=self.headers).status_code,200)
-        store.delete_scans();self.assertTrue(any(s['id']==sid for s in app.schedules_list()))
-        self.assertEqual(self.client.delete('/api/schedules/'+sid,headers=self.headers).status_code,200)
+    def test_scheduled_search_creation_is_retired_and_archives_remain(self):
+        body=dict(name='Old schedule',config=config().model_dump(mode='json'),cron='0 9 * * *',timezone='America/New_York',enabled=True)
+        with store.db() as conn:
+            conn.execute('INSERT INTO schedules VALUES (?,?,?,?,?,?)',('old',store.dump(body),0,None,None,None))
+        self.assertEqual(self.client.post('/api/schedules',json=body,headers=self.headers).status_code,410)
+        self.assertEqual(self.client.put('/api/schedules/old',json=body,headers=self.headers).status_code,410)
+        self.assertFalse(self.client.get('/api/schedules').json()['items'][0]['enabled'])
+        self.assertFalse(hasattr(app,'scheduler'))
+        store.delete_scans();self.assertEqual(len(app.schedules_list()),1)
 
     def test_persistence_restart_recovery_and_safe_export(self):
         sid=self.make_scan(1);before=store.get_scan(sid)

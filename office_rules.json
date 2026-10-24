@@ -3,9 +3,64 @@
   "excluded_shops": [],
   "excluded_amenities": [],
   "categories": [
-    {"id": "hospital", "tags": {"amenity": ["hospital"], "healthcare": ["hospital"]}},
-    {"id": "dental", "tags": {"amenity": ["dentist"], "healthcare": ["dentist"]}},
-    {"id": "medical", "tags": {"amenity": ["doctors", "clinic"], "healthcare": ["doctor", "doctors", "clinic", "physiotherapist", "psychotherapist", "psychologist", "podiatrist", "midwife", "rehabilitation", "laboratory", "alternative", "optometrist", "audiologist"]}},
-    {"id": "company", "nonempty_tags": {"office": ["no", "vacant", "disused", "construction"]}}
-  ]
+    {
+      "id": "hospital",
+      "tags": {
+        "amenity": [
+          "hospital"
+        ],
+        "healthcare": [
+          "hospital"
+        ]
+      }
+    },
+    {
+      "id": "dental",
+      "tags": {
+        "amenity": [
+          "dentist"
+        ],
+        "healthcare": [
+          "dentist"
+        ]
+      }
+    },
+    {
+      "id": "medical",
+      "tags": {
+        "amenity": [
+          "doctors",
+          "clinic"
+        ],
+        "healthcare": [
+          "doctor",
+          "doctors",
+          "clinic",
+          "physiotherapist",
+          "psychotherapist",
+          "psychologist",
+          "podiatrist",
+          "midwife",
+          "rehabilitation",
+          "laboratory",
+          "alternative",
+          "optometrist",
+          "audiologist"
+        ]
+      }
+    },
+    {
+      "id": "company",
+      "nonempty_tags": {
+        "office": [
+          "no",
+          "vacant",
+          "disused",
+          "construction"
+        ]
+      }
+    }
+  ],
+  "minimum_cluster_size": 2,
+  "notes": "至少两家已映射公司 / 医疗机构；许可未知可作为候选，明确拒收排除。"
 }

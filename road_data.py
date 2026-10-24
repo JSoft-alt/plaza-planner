@@ -21,6 +21,7 @@ import requests
 from shapely.geometry import MultiPoint, shape
 
 import store
+import estimates
 
 CATALOG = 'https://download.geofabrik.de/index-v1.json'
 PHASES = {'queued':'等待准备路网','checking':'检查已有路网','catalog':'选择覆盖本批地点的路网',
@@ -188,7 +189,8 @@ class Manager:
             return False
 
     def command(self, key, args, phase, directory, timeout=7200):
-        self.update(key,phase=phase)
+        timing_key=f'road:{phase}:{(directory/"map.osm.pbf").stat().st_size}'
+        self.update(key,phase=phase,eta_seconds=estimates.expected(timing_key),eta_scope='当前路网步骤')
         with (directory/(phase+'.log')).open('wb') as log:
             process=subprocess.Popen(args,cwd=directory,stdout=log,stderr=subprocess.STDOUT)
             started=time.monotonic()
@@ -198,6 +200,7 @@ class Manager:
                         raise ValueError('路网准备已停止或超时；已下载的数据会保留，可重试。')
                 if process.returncode:
                     raise ValueError(f'{PHASES[phase]}失败。请检查内存/磁盘和 data/routing 中的准备日志后重试。')
+                estimates.record(timing_key,time.monotonic()-started)
             finally:
                 if process.poll() is None:
                     process.terminate()
@@ -207,34 +210,21 @@ class Manager:
     def download(self, key, url, directory):
         target=directory/'map.osm.pbf'
         if target.exists():return target
+        # One shared downloader/cache prevents discovery and origin prefetch
+        # from downloading the same region concurrently.
+        import local_discovery
+        region_id=self.jobs[key].get('region_id',url.rsplit('/',1)[-1])
         self.update(key,phase='download',download_bytes=0,total_bytes=None)
-        partial=directory/'map.osm.pbf.part'
-        try:
-            with requests.get(url,stream=True,timeout=(5,30)) as response:
-                response.raise_for_status()
-                total=int(response.headers.get('Content-Length') or 0)
-                maximum=int(os.environ.get('OSRM_MAX_EXTRACT_MB','2048'))*1024**2
-                if total and maximum and total>maximum:
-                    raise ValueError('覆盖整批地点的路网超过本机自动下载大小上限；请在足够内存/磁盘的自托管机器上提高 OSRM_MAX_EXTRACT_MB 后重试。不会购买云资源。')
-                if total and shutil.disk_usage(directory).free<total*10+512*1024**2:
-                    raise ValueError('此区域的路网需要更多磁盘空间。请腾出空间或在容量更大的自托管机器上运行；不会购买云资源。')
-                size=0;last=0;started=time.monotonic()
-                with partial.open('wb') as output:
-                    for chunk in response.iter_content(1024*1024):
-                        if self.cancelled(key) or time.monotonic()-started>3600:
-                            raise ValueError('道路数据下载已停止或超时，请联网后重试。')
-                        size+=len(chunk)
-                        if maximum and size>maximum:raise ValueError('区域道路文件超过 OSRM_MAX_EXTRACT_MB 上限，请在适合的自托管机器上调整后重试。')
-                        output.write(chunk)
-                        if time.monotonic()-last>.5:
-                            self.update(key,phase='download',download_bytes=size,total_bytes=total or None)
-                            last=time.monotonic()
-                if not size or (total and size!=total):raise ValueError('道路数据下载不完整，请重试。')
-            partial.replace(target)
-            self.update(key,phase='download',download_bytes=size,total_bytes=size)
-            return target
-        except requests.RequestException as exc:
-            raise ValueError('区域道路数据下载失败，请检查网络后重试；不会使用公共路线演示服务器。') from exc
+        def activity(**event):
+            self.update(key,phase='download',download_bytes=event.get('bytes',0),
+                total_bytes=event.get('total_bytes'),eta_seconds=event.get('eta_seconds'),eta_scope='下载')
+        source=local_discovery.source_file(dict(properties=dict(id=region_id,urls={'pbf':url})),
+            activity,lambda:self.cancelled(key))
+        if shutil.disk_usage(directory).free < source.stat().st_size*10+512*1024**2:
+            raise ValueError('此区域路网需要更多磁盘空间，已有地图会保留。')
+        try:os.link(source,target)
+        except OSError:shutil.copyfile(source,target)
+        return target
 
     def start_engine(self, key, directory, region):
         with self.lock:

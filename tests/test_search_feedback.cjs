@@ -18,3 +18,9 @@ test('fallback, receiving bytes, filtering and cancellation are distinguishable'
   assert.match(feedback({...scan,cancel:true},2005,2005),/正在取消/);
   assert.match(feedback(scan,2068,2000),/连接暂时中断/);
 });
+test('local phase ETA is labelled and expires without promising whole-job completion',()=>{
+  const a={phase:'local_read',elements:500,eta_seconds:28,eta_scope:'地图处理',updated_at:2000};
+  assert.match(feedback({...scan,activity:a},2005,2005),/地图处理约 30 秒/);
+  assert.doesNotMatch(feedback({...scan,activity:a},2050,2050),/约.*秒/);
+  assert.match(feedback({...scan,activity:{phase:'local_clip'}},2005,2005),/提取搜索区域/);
+});

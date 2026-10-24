@@ -79,7 +79,7 @@ class Portability(unittest.TestCase):
             self.assertEqual(second,features)
             self.assertEqual(post.call_count,1)
 
-    def test_native_process_unicode_history_schedule_lock_and_restart(self):
+    def test_native_process_unicode_history_lock_and_restart(self):
         with tempfile.TemporaryDirectory(prefix='planner spaces ') as folder:
             data = Path(folder) / '医院与公司 数据'
             source = Path(folder) / '中文 app source'
@@ -99,6 +99,9 @@ class Portability(unittest.TestCase):
                 store.update_scan(scan['id'], status='complete', plazas=[dict(id='way:1',name='牙科与律师办公楼',
                     lat=40.759,lng=-73.985,address='测试街道',rank=1,company_count=2,entity_kind='building')])
                 store.auto_export(scan['id'])
+                archived=dict(name='旧定时搜索',config=config.model_dump(mode='json'),cron='0 9 * * *',timezone='America/New_York',enabled=True)
+                with store.db() as conn:
+                    conn.execute('INSERT INTO schedules VALUES (?,?,?,?,?,?)',('archived',store.dump(archived),1,1,None,None))
             env = os.environ | dict(PLANNER_DATA_DIR=str(data),OSRM_AUTO_DOWNLOAD='0',PYTHONTZPATH='',PYTHONUTF8='0')
             with (Path(folder)/'server.log').open('wb') as log:
                 def start():
@@ -134,12 +137,9 @@ class Portability(unittest.TestCase):
                     saved=api(url,f"/api/scans/{scan['id']}")
                     self.assertEqual(saved['plazas'][0]['name'],'牙科与律师办公楼')
                     self.assertEqual(api(url,f"/api/scans/{scan['id']}/export")['config']['discovery_kind'],'offices')
-                    schedule=api(url,'/api/schedules',dict(name='中文定时搜索',config=config.model_dump(mode='json'),
-                        cron='0 9 * * *',timezone='America/New_York',enabled=False),bootstrap['csrf'])
-                    self.assertIn('id',schedule)
                     second,_=start()
                     try:
-                        self.assertNotEqual(second.wait(timeout=15),0,'Duplicate instance must fail instead of sharing the scheduler')
+                        self.assertNotEqual(second.wait(timeout=15),0,'Duplicate instance must fail instead of sharing the history database')
                         self.assertEqual(api(url,'/api/bootstrap')['csrf'],bootstrap['csrf'])
                     finally:stop(second)
                 finally:stop(first)
@@ -148,8 +148,8 @@ class Portability(unittest.TestCase):
                     wait_ready(restarted,url)
                     self.assertEqual(api(url,'/api/history')['total'],1)
                     schedules=api(url,'/api/schedules')['items']
-                    self.assertEqual(schedules[0]['name'],'中文定时搜索')
-                    self.assertEqual(schedules[0]['config']['min_companies'],2)
+                    self.assertEqual(schedules[0]['name'],'旧定时搜索')
+                    self.assertFalse(schedules[0]['enabled']);self.assertIsNone(schedules[0]['next_run'])
                 finally:stop(restarted)
 
 
