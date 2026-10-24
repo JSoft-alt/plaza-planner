@@ -136,7 +136,10 @@ def new_trip(sid):
         if existing and (not existing.get("route") or (existing["number"] > 1 and not existing["route"].get("start"))):
             return existing["id"]  # Reuse unfinished or legacy batches that need recalculation.
         assigned = {r[0] for r in conn.execute("SELECT plaza_id FROM assignments WHERE scan_id=?", (sid,))}
-        chosen = [p["id"] for p in scan["plazas"] if p["id"] not in assigned][:scan["config"]["batch_size"]]
+        queue = scan.get('route_plan',{}).get('order') or [p['id'] for p in scan['plazas']]
+        if len(queue)!=len(scan['plazas']) or set(queue)!={p['id'] for p in scan['plazas']}:
+            raise ValueError('保存的访问顺序不完整，请重新规划。')
+        chosen = [pid for pid in queue if pid not in assigned][:scan["config"]["batch_size"]]
         if not chosen:
             raise ValueError("所有地点均已分趟。")
         tid = uid()

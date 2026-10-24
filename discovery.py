@@ -1,6 +1,7 @@
 """Bounded Overpass discovery with resumable tiles and evidence-based grouping."""
 import json
 import hashlib
+from functools import lru_cache
 import math
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import unicodedata
 from urllib.parse import urlsplit
 
 import requests
-from shapely.geometry import Point, Polygon, LineString, box
+from shapely.geometry import Point, Polygon, LineString, box, shape as geo_shape
 from shapely.ops import polygonize, transform, unary_union
 from shapely.strtree import STRtree
 
@@ -31,17 +32,26 @@ def normalized(text):
     return re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", text).casefold()).strip()
 
 
+@lru_cache(maxsize=64)
+def name_pattern(words):
+    terms = [re.escape(normalized(word)) for word in words if normalized(word)]
+    return re.compile(r'(?<!\w)(?:'+'|'.join(terms)+r')(?!\w)') if terms else None
+
+
+def name_matches(name, words):
+    pattern = name_pattern(tuple(words))
+    return bool(pattern and pattern.search(name))
+
+
 def category(tags, rules):
-    name = " | ".join(normalized(tags.get(key, "")) for key in ("name", "brand", "operator"))
-    if any(re.search(r"(?<!\w)" + re.escape(normalized(word)) + r"(?!\w)", name)
-           for word in rules["excluded_names_or_brands"]):
+    name = " | ".join(normalized(tags[key]) for key in ("name", "brand", "operator") if tags.get(key))
+    if name_matches(name, rules["excluded_names_or_brands"]):
         return None
     if tags.get("shop") in rules["excluded_shops"] or tags.get("amenity") in rules["excluded_amenities"]:
         return None
     for item in rules["categories"]:
         matches = any(set(tags.get(key, "").lower().split(";")) & set(values) for key, values in item.get("tags", {}).items())
-        matches |= any(re.search(r"(?<!\w)" + re.escape(normalized(word)) + r"(?!\w)", name) is not None
-                       for word in item.get("name_words", []))
+        matches |= name_matches(name,item.get("name_words", []))
         matches |= any(tags.get(key, "").strip().lower() not in excluded and bool(tags.get(key, "").strip())
                        for key, excluded in item.get("nonempty_tags", {}).items())
         if matches:
@@ -52,6 +62,8 @@ def category(tags, rules):
 
 
 def geometry(element):
+    if element.get("geojson"):
+        return geo_shape(element["geojson"])
     if element["type"] == "node":
         return Point(element["lon"], element["lat"])
     if element["type"] == "way":
@@ -79,14 +91,33 @@ def address(tags):
     return ", ".join(v for v in (street, tags.get("addr:city"), tags.get("addr:state"), tags.get("addr:postcode")) if v)
 
 
+def excluded_destination(tags, metric, rules, children=False):
+    policy = rules.get('destination_policy', {})
+    name = ' | '.join(normalized(tags.get(key,'')) for key in ('name','brand','operator'))
+    if name_matches(name,policy.get('excluded_names_or_brands', [])):
+        return True
+    mall = tags.get('shop') == 'mall' or tags.get('building') in ('shopping_centre','shopping_center')
+    try:levels=float(tags.get('building:levels','0'))
+    except ValueError:levels=0
+    big_mall = mall and (metric.area > policy.get('max_mall_area_m2',float('inf')) or levels > policy.get('max_mall_levels',float('inf')))
+    return big_mall or (not children and metric.area > policy.get('max_site_area_m2',float('inf')))
+
+
 def qualify(elements, config, rules=None):
     offices = config.discovery_kind == "offices"
     rules = rules or json.loads((OFFICE_RULES if offices else RULES).read_text(encoding="utf-8"))
     rules_hash = hashlib.sha256(store.dump(rules).encode()).hexdigest()
     area, forward, inverse = config.area()
-    shops, outlines = [], []
+    shops, outlines, excluded_areas = [], [], []
     for element in elements:
         tags = element.get("tags", {})
+        kind = category(tags, rules)
+        is_mall = tags.get("shop") == "mall" or tags.get("building") in ("shopping_centre", "shopping_center")
+        office_outline = tags.get("building", "no") not in ("no", "roof", "construction", "ruins") or tags.get("landuse") == "commercial" or bool(kind)
+        potential_outline = office_outline if offices else (is_mall or tags.get('landuse')=='retail' or tags.get('building')=='retail')
+        named_blocker = not offices and element['type']!='node' and name_matches(' | '.join(normalized(tags[k]) for k in ('name','brand','operator') if tags.get(k)),rules.get('destination_policy',{}).get('excluded_names_or_brands',[]))
+        if not kind and not potential_outline and not named_blocker:
+            continue  # Filter tags before constructing/projecting irrelevant geometry.
         shape = geometry(element)
         if shape is None or shape.is_empty:
             continue
@@ -94,16 +125,20 @@ def qualify(elements, config, rules=None):
         if metric.is_empty or not metric.is_valid:
             continue
         pid = f"{element['type']}:{element['id']}"
-        kind = category(tags, rules)
+        if not offices and metric.geom_type in ('Polygon','MultiPolygon') and excluded_destination(tags,metric,rules):
+            if metric.geom_type in ('Polygon','MultiPolygon') and excluded_destination(tags,metric,rules,children=True):
+                excluded_areas.append(metric)
+            continue
         if kind:
             shops.append(dict(id=pid, tags=tags, category=kind, point=metric.representative_point(), geometry=metric))
-        is_mall = tags.get("shop") == "mall" or tags.get("building") in ("shopping_centre", "shopping_center")
-        office_outline = tags.get("building", "no") not in ("no", "roof", "construction", "ruins") or tags.get("landuse") == "commercial" or bool(kind)
-        if metric.geom_type in ("Polygon", "MultiPolygon") and (office_outline if offices else (is_mall or tags.get("landuse") == "retail" or tags.get("building") == "retail")):
+        if metric.geom_type in ("Polygon", "MultiPolygon") and potential_outline:
             point = metric.representative_point()
             if area.covers(point):
                 priority = (2 if tags.get("landuse") == "commercial" else 0 if tags.get("building") else 1) if offices else (0 if is_mall else 1 if tags.get("landuse") == "retail" else 2)
                 outlines.append(dict(id=pid, tags=tags, geometry=metric, point=point, priority=priority))
+    if not offices and excluded_areas:
+        blocked = STRtree(excluded_areas)
+        shops = [shop for shop in shops if not any(excluded_areas[int(i)].covers(shop['point']) for i in blocked.query(shop['point']))]
     # Nodes and building footprints often describe the same storefront. Use a
     # spatial index; matching name OR containment of an unnamed feature is needed.
     shops.sort(key=lambda s: (not bool(s["tags"].get("name")), s["id"]))
@@ -134,6 +169,8 @@ def qualify(elements, config, rules=None):
     tree = STRtree([s["point"] for s in shops])
     candidates = []
     for outline in outlines:
+        if not offices and any(zone.covers(outline['point']) for zone in excluded_areas):
+            continue
         inside = [shops[int(i)] for i in tree.query(outline["geometry"]) if (offices or shops[int(i)]["id"] != outline["id"])
                   and outline["geometry"].covers(shops[int(i)]["point"])]
         if len(inside) >= (config.min_companies if offices else config.min_shops):
@@ -283,7 +320,38 @@ def run_scan(sid):
         scan = store.get_scan(sid)
         config = SearchInput.model_validate(scan["config"])
         rules = scan.get("qualification_rules") or json.loads((OFFICE_RULES if config.discovery_kind == "offices" else RULES).read_text(encoding="utf-8"))
+        if config.discovery_kind == 'retail':
+            # A retry adopts the user's current destination exclusions. Completed
+            # historical scans/routes remain untouched until a new search/retry.
+            rules = rules | {'destination_policy':json.loads(RULES.read_text(encoding='utf-8')).get('destination_policy',{})}
         store.update_scan(sid, qualification_rules=rules)
+        if os.environ.get('DISCOVERY_SOURCE', 'local') == 'local':
+            import local_discovery
+            def activity(**event):
+                prior = store.get_scan(sid).get('activity') or {}
+                now = time.time()
+                same = prior.get('phase') == event['phase'] and prior.get('provider') == event.get('provider')
+                store.update_scan(sid, activity=event | dict(updated_at=now,
+                    phase_started_at=prior.get('phase_started_at', now) if same else now))
+            store.update_scan(sid, status='running', run_started_at=time.time(), progress=None,
+                              message='读取本机地图数据')
+            last_plazas = None
+            def partial_results(elements, done, total):
+                nonlocal last_plazas
+                last_plazas = qualify(elements,config,rules)
+                store.update_scan(sid, plazas=last_plazas,
+                    completed_tiles=list(range(done)),progress={'done':done,'total':total})
+            elements, source = local_discovery.search(config, rules, activity,
+                cancelled=lambda: store.get_scan(sid)['cancel'],on_results=partial_results)
+            activity(phase='filter', elements=len(elements))
+            plazas = last_plazas if last_plazas is not None else qualify(elements, config, rules)
+            if store.get_scan(sid)['cancel']:
+                raise ValueError('搜索已取消；已保存的数据保留。')
+            store.update_scan(sid, status='complete', plazas=plazas, data_source=source,
+                completed_tiles=list(range(len(source['regions']))), progress=None, message='本机地图搜索完成',
+                completed=time.time(), elapsed_seconds=round(time.monotonic()-started,1))
+            store.auto_export(sid)
+            return
         checkpoint = store.DATA / "checkpoints" / f"{sid}.json"
         cached = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.exists() else {"elements": {}, "done": []}
         work = tiles(config)

@@ -51,6 +51,9 @@ class ChainedBatches(unittest.TestCase):
             first = store.new_trip(self.sid)
             rec = self.calculate(first)
             first_end = rec['trips'][0]['route']['end']
+            self.assertEqual(first_end['id'],rec['trips'][0]['route']['order'][-1])
+            self.assertNotEqual(first_end['id'],rec['trips'][0]['route']['order'][0])
+            self.assertNotEqual((first_end['lat'],first_end['lng']),(self.config.origin.lat,self.config.origin.lng))
             self.assertEqual(rec['trips'][0]['plaza_ids'],[p['id'] for p in self.plazas[:8]])
             second = store.new_trip(self.sid)
             rec = self.calculate(second)
@@ -77,6 +80,20 @@ class ChainedBatches(unittest.TestCase):
             with self.assertRaises(ValueError):store.update_trip(self.sid,first,route=rec['trips'][0]['route'])
             with self.assertRaises(ValueError):store.new_trip(self.sid)
             self.assertEqual(store.get_scan(self.sid)['trips'][1]['start'],second_trip['start'])
+
+    def test_next_point_zero_is_last_optimized_stop_not_queue_end_or_first_stop(self):
+        with patch.object(routing,'request_osrm',side_effect=fake_osrm) as request,patch.object(routing,'optimize',side_effect=[([8,1,2,3,4,5,6,7],True),([1,2,3,4,5,6,7,8],True)]):
+            first=store.new_trip(self.sid)
+            first_result=self.calculate(first)['trips'][0]
+            self.assertEqual(first_result['route']['order'][0],'way:8')
+            self.assertEqual(first_result['route']['end']['id'],'way:7')
+            second=store.new_trip(self.sid)
+            following=self.calculate(second)['trips'][1]
+            self.assertEqual(following['start']['id'],'way:7')
+            tables=[call.args[1] for call in request.call_args_list if call.args[0]=='table']
+            endpoint=self.plazas[6]
+            self.assertEqual(tables[1][0],(endpoint['lng'],endpoint['lat']))
+            self.assertEqual(len(tables[1]),9)
 
     def test_return_to_start_carries_actual_return_endpoint(self):
         with patch.object(routing,'request_osrm',side_effect=fake_osrm):

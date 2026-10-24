@@ -24,6 +24,7 @@ import discovery
 import geocoding
 from models import Origin, SearchInput, ScheduleInput, cron_trigger
 import routing
+import continuous_routing
 import road_data
 import embeds
 import sharing
@@ -68,7 +69,7 @@ def run(sid, schedule_id=None):
         completed = store.get_scan(sid)
         if completed['status'] == 'complete':
             road_data.request([(completed['config']['origin']['lng'],completed['config']['origin']['lat'])]
-                              + [(p['lng'],p['lat']) for p in completed['plazas']])
+                              + [(p['lng'],p['lat']) for p in completed['plazas'][:completed['config']['batch_size']]])
     finally:
         if schedule_id:
             try:
@@ -270,9 +271,33 @@ def retry(sid: str):
 
 @app.post("/api/scans/{sid}/trips")
 def trip(sid: str):
+    rec=store.get_scan(sid)
+    if rec['status']!='complete':raise ValueError('请先完成搜索。')
+    if not rec['trips'] and not rec.get('route_plan'):
+        if not route_lock.acquire(blocking=False):raise HTTPException(409,'另一路线正在计算，请稍候。')
+        try:
+            origin=rec['config']['origin']
+            coverage=road_data.request([(origin['lng'],origin['lat'])],retry=True)
+            if coverage['phase'] in ('failed','cancelled'):raise ValueError(coverage.get('error','路线服务准备失败。'))
+            if coverage['phase']!='ready':return JSONResponse({'preparing':True,'coverage':road_data.Manager.public(coverage)},status_code=202)
+            with road_data.using(coverage['endpoint']):
+                plan=continuous_routing.build(rec,coverage['endpoint'])
+            store.update_scan(sid,route_plan=plan)
+        finally:route_lock.release()
     store.new_trip(sid)
     store.auto_export(sid)
     return store.get_scan(sid)
+
+
+@app.post('/api/scans/{sid}/continuous-copy')
+def continuous_copy(sid: str):
+    source=store.get_scan(sid)
+    if source['status']!='complete':raise ValueError('请先完成搜索。')
+    rec=store.insert_scan(source['config'])
+    store.update_scan(rec['id'],status='complete',plazas=source['plazas'],message='已复制地点，等待连续规划',
+        qualification_rules=source.get('qualification_rules'),data_source=source.get('data_source'),completed=time.time())
+    store.auto_export(rec['id'])
+    return store.get_scan(rec['id'])
 
 
 class RouteInput(BaseModel):
@@ -306,12 +331,18 @@ def route(sid: str, tid: str, body: RouteInput):
         by_id = {p["id"]: p for p in rec["plazas"]}
         start = store.trip_start(rec, current)
         stops = [by_id[i] for i in current['plaza_ids']]
+        if rec.get('route_plan') and body.return_to_origin:
+            raise ValueError('连续覆盖路线不返回本趟起点；下一趟从本趟最后一站接续。')
         coverage = road_data.request([(start['lng'],start['lat'])]+[(p['lng'],p['lat']) for p in stops],retry=body.retry_coverage)
         if coverage['phase'] in ('failed','cancelled'):raise ValueError(coverage['error'])
         if coverage['phase'] != 'ready':return JSONResponse({'preparing':True,'coverage':road_data.Manager.public(coverage)},status_code=202)
         with road_data.using(coverage['endpoint']):
             result = routing.calculate(SearchInput.model_validate(rec["config"]), stops,
-                                      body.return_to_origin, start=start, osrm_url=coverage['endpoint'])
+                                      body.return_to_origin, start=start, osrm_url=coverage['endpoint'],
+                                      **({'fixed_end_id':stops[-1]['id']} if rec.get('route_plan') else {}))
+        if rec.get('route_plan'):
+            result['global_optimal']=False
+            result['note']='按全区域快速连续计划分段；本趟固定首尾优化。整体未证明全局最优，不含实时交通；下一趟从本趟最后一站接续。'
         result['road_data'] = coverage.get('road_data') or {'region':coverage.get('region','已配置路网')}
         store.update_trip(sid, tid, route=result, error=None)
         store.auto_export(sid)

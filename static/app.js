@@ -9,6 +9,18 @@ const coordinateLabel = (lat, lng) => `${Number(lat).toFixed(6)}, ${Number(lng).
 const icon = name => `<svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${{share:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m9 10 6-4M9 14l6 4"/>',locate:'<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>',route:'<path d="m3 10 18-7-7 18-3-8-8-3Z"/>',map:'<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15"/>'}[name]}</svg>`;
 const statusNames = {queued:'等待搜索',running:'搜索中',complete:'已完成',partial:'未完成',failed:'失败',cancelled:'已取消'};
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function displayLabel(value){
+  const original=String(value??'').trim();
+  if(!original||/^[+-]?\d+(?:\.\d+)?\s*,\s*[+-]?\d+(?:\.\d+)?$/.test(original))return original;
+  const parts=[...new Set(original.split(',').map(part=>part.split(';')[0].trim()).filter(Boolean))];
+  if(parts.length<4)return parts.join(', ');
+  const states={'New York':'NY','纽约州':'NY','紐約州':'NY','New Jersey':'NJ','新泽西州':'NJ','新澤西州':'NJ','Connecticut':'CT','Pennsylvania':'PA','Massachusetts':'MA','California':'CA','Florida':'FL','Texas':'TX','Washington':'WA','District of Columbia':'DC'};
+  const abbreviations=new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
+  const state=parts.map(part=>states[part]??(abbreviations.has(part)?part:null)).filter(Boolean).at(-1);
+  const useful=parts.filter(part=>!states[part]&&!abbreviations.has(part)&&!/(?:County|县|縣)$/i.test(part)&&!/^\d{5}(?:-\d{4})?$/.test(part)&&!['美国','美國','United States','United States of America','USA'].includes(part));
+  if(useful.length>=3&&/^\d[\dA-Za-z /-]*$/.test(useful[1]))return `${useful[0]} · ${useful[1]} ${useful[2]}${useful[3]?`, ${useful[3]}`:''}${state?`, ${state}`:''}`;
+  return [...useful.slice(0,3),...(state?[state]:[])].join(', ');
+}
 const dateText = value => value ? new Date(value*1000).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,6000);}
 function clearErrors(){document.querySelectorAll('.field-error').forEach(el=>el.textContent='');}
@@ -36,9 +48,9 @@ function syncDiscoveryKind(c){
   $('minShopsGroup').hidden=offices;$('minCompaniesGroup').hidden=!offices;
   $('minShops').disabled=offices;$('minCompanies').disabled=!offices;
   $('search').textContent=offices?'搜索并保存办公 / 医疗地点':'搜索并保存全部商业区';
-  $('plannerDescription').textContent=offices?'找到医院、牙科、律师事务所与公司所在的楼宇或办公区，按方位分趟。':'找到合适的商业区，按方位分趟，再计算驾驶路线。';
-  $('discoveryCoverage').textContent=offices?'按每栋楼或办公区内已映射的公司 / 医疗机构数筛选，不按距离聚成一簇。独立医院或诊所计为 1 家；设为 1 可纳入。地图可能缺少租户信息。':'依据已映射的小店数量筛选。地图数据可能缺失，结果不代表全部实体商户。';
-  $('emptyDescription').textContent=offices?'确认起点与范围后，符合公司数量要求的楼宇、办公区与医疗机构会排在这里。':'确认地址并设定范围，符合条件的商业区会按方位依次排在这里。';
+  $('plannerDescription').textContent=offices?'找到医院、牙科、律师事务所与公司所在的楼宇或办公区，连续规划每一趟。':'找到理发、美甲等小店所在的小型商业区，连续规划每一趟。';
+  $('discoveryCoverage').textContent=offices?'按每栋楼或办公区内已映射的公司 / 医疗机构数筛选，不按距离聚成一簇。独立医院或诊所计为 1 家；设为 1 可纳入。地图可能缺少租户信息。':'按已映射的小店数量筛选，排除大型商场和大型连锁卖场。地图可能缺少商户信息。';
+  $('emptyDescription').textContent=offices?'确认起点与范围后，符合公司数量要求的楼宇、办公区与医疗机构会排在这里。':'确认地址并设定范围，找到商业区后即可规划连续路线。';
   $('emptySearchLabel').textContent=offices?'搜索办公 / 医疗地点':'搜索商业区';
   $('resultUnit').textContent=offices?'个办公 / 医疗地点':'个商业区';
   $('zeroResults').textContent=offices?'未找到满足公司数量要求的已映射楼宇或办公区。可将最少公司数设为 1 以纳入独立医院 / 诊所，或缩小范围后重试。':'未找到满足条件的已映射商业区。可降低小店数或扩大范围后重新搜索。';
@@ -46,9 +58,9 @@ function syncDiscoveryKind(c){
 function canSearch(){const c=config();return c.origin?.confirmed&&validNumbers(c)&&(c.mode==='circle'||(c.polygon.length>=3&&mapGeometry.covers(c.polygon,c.origin.lng,c.origin.lat)))&&!state.busy&&!['queued','running'].includes(state.scan?.status);}
 function persist(){try{localStorage.setItem('plaza-planner-draft',JSON.stringify({config:config(),address:$('address').value,scanId:state.scan?.id,tripId:state.tripId}));}catch{/* Storage may be disabled; server history remains durable. */}}
 function syncForm(){
-  const c=config();syncDiscoveryKind(c);$('diameterGroup').hidden=c.mode==='polygon';$('areaSummary').hidden=c.mode!=='polygon';
+  const c=config();syncDiscoveryKind(c);$('address').title=c.origin?.label??'';$('originSummary').title=c.origin?.label??'';$('diameterGroup').hidden=c.mode==='polygon';$('areaSummary').hidden=c.mode!=='polygon';
   $('areaSummary').textContent=c.polygon.length?`已设定 ${c.polygon.length} 个顶点。搜索以边界为准，保留的直径不参与搜索。`:'请在地图中绘制边界；直径不参与搜索。';
-  $('originSummary').hidden=!c.origin?.confirmed;$('originSummary').textContent=c.origin?`已确认：${c.origin.label}`:'';
+  $('originSummary').hidden=!c.origin?.confirmed;$('originSummary').textContent=c.origin?`已确认：${displayLabel(c.origin.label)}`:'';
   if(c.mode==='polygon'&&c.origin&&c.polygon.length>=3&&!mapGeometry.covers(c.polygon,c.origin.lng,c.origin.lat))$('error-polygon').textContent='起点必须位于绘制区域内或边界上，请移动起点或修改边界。';
   else if($('error-polygon').textContent.startsWith('起点必须'))$('error-polygon').textContent='';
   $('search').disabled=!canSearch();persist();queueOriginRoadData();
@@ -58,7 +70,7 @@ function validateNumberInput(id){
   if(fields[id]){const [field,message]=fields[id];const el=$(id);$('error-'+field).textContent=el.value!==''&&el.checkValidity()?'':message;}
 }
 function restoreConfig(c){
-  state.discoveryKind=c.discovery_kind??"retail";$('minCompanies').value=c.min_companies??3;state.origin=c.origin;state.polygon=c.polygon??[];$('address').value=c.origin?.label??'';
+  state.discoveryKind=c.discovery_kind??"retail";$('minCompanies').value=c.min_companies??3;state.origin=c.origin;state.polygon=c.polygon??[];$('address').value=displayLabel(c.origin?.label);
   document.querySelector(`[name=mode][value=${c.mode}]`).checked=true;
   $('diameter').value=c.diameter_miles;$('minShops').value=c.min_shops;$('batchSize').value=c.batch_size;$('baseline').value=c.baseline;
   syncForm();
@@ -78,7 +90,7 @@ async function lookupAddress(input, target, onChoose, provider='census') {
     target.append(note);
     for (const match of matches) {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'match';
-      const label = document.createElement('span'); label.textContent = match.label;
+      const label = document.createElement('span'); label.textContent = displayLabel(match.label);
       const precision = document.createElement('small'); precision.textContent = match.precision;
       button.append(label, precision);
       button.onclick = () => onChoose({label: match.label, lat: match.lat, lng: match.lng, source: 'address', confirmed: true, accuracy_m: null});
@@ -126,6 +138,15 @@ function searchFeedback(scan,now=Date.now()/1000,lastPollAt=null){
   if(a.phase==='query')stage=`${a.attempt>1?'主服务不可用，正在尝试备用服务':'等待地图服务响应'} · ${a.provider??''}（第 ${a.attempt??1}/${a.attempts??1} 次请求）`;
   if(a.phase==='download')stage=`接收地图数据 · ${Math.round((a.bytes??0)/1024)} KB`;
   if(a.phase==='cache')stage=`复用 ${Math.max(1,Math.ceil((a.age_seconds??0)/60))} 分钟内的地图缓存`;
+  if(a.phase==='local_wait')stage='等待本机地图读取；已有地图会直接复用';
+  if(a.phase==='local_catalog')stage='读取区域地图目录';
+  if(a.phase==='local_prepare')stage=`准备本机地图 · ${a.provider??''}（${(a.done??0)+1}/${a.total??1}）`;
+  if(a.phase==='local_download')stage=`首次下载 ${a.provider??''} 地图 · ${((a.bytes??0)/1048576).toFixed(1)}${a.total_bytes?` / ${(a.total_bytes/1048576).toFixed(1)}`:''} MB，下载后可重复使用`;
+  if(a.phase==='local_companies')stage=`读取本机商店 / 机构 · 已处理 ${(a.elements??0).toLocaleString()} 个相关要素`;
+  if(a.phase==='local_buildings')stage=`匹配 ${a.businesses??0} 个商店 / 机构的楼宇 · 已核对 ${(a.elements??0).toLocaleString()} 个边界`;
+  if(a.phase==='local_read')stage=`读取本机地图 · 已处理 ${(a.elements??0).toLocaleString()} 个相关要素`;
+  if(a.phase==='local_filter')stage=`本机核对 ${a.businesses??0} 个机构 / 商店与 ${a.outlines??0} 个楼宇边界`;
+  if(a.phase==='local_cache')stage=`复用本机区域缓存 · ${a.elements??0} 个相关要素`;
   if(a.phase==='filter')stage=`处理 ${a.elements??0} 个地图要素，筛选${scan.config?.discovery_kind==='offices'?'办公 / 医疗地点':'商业区'}并去重`;
   if(scan.cancel)stage='正在取消；当前网络请求结束后停止，不会再查询下一区域或备用服务。';
   else if(lastPollAt&&now-lastPollAt>10)stage='与本地应用的连接暂时中断，正在重连；已保存的搜索会保留。';
@@ -138,6 +159,7 @@ function updateSearchFeedback(){
 }
 setInterval(updateSearchFeedback,1000);
 function currentTrip(){return state.scan?.trips?.find(t=>t.id===state.tripId);}
+function visitRank(scan,id){return scan.route_plan?scan.route_plan.order.indexOf(id)+1:scan.plazas.find(p=>p.id===id)?.rank;}
 function renderResults(){
   const s=state.scan;if(!s)return;$('empty').hidden=true;$('scanResults').hidden=false;
   const active=['queued','running'].includes(s.status);$('activeProgress').hidden=!active;
@@ -146,31 +168,34 @@ function renderResults(){
   $('scanNotice').hidden=active||(s.status==='complete'&&!s.export_error);
   $('scanMessage').textContent=s.export_error||`${statusNames[s.status]}：${s.message}`;
   $('retryScan').hidden=s.status==='complete';$('retryScan').disabled=state.busy;
-  $('resultCount').textContent=s.plazas.length;$('scanLabel').textContent=`${s.config.origin.label} · ${boundaryText(s.config)} · ${dateText(s.created)}${s.elapsed_seconds!=null?` · 耗时 ${Math.round(s.elapsed_seconds)} 秒`:''}`;
+  $('resultCount').textContent=s.plazas.length;$('scanLabel').textContent=`${displayLabel(s.config.origin.label)} · ${boundaryText(s.config)} · ${dateText(s.created)}${s.data_source?.mode==='local-osm'?' · 本机 OSM 地图':''}${s.elapsed_seconds!=null?` · 耗时 ${s.elapsed_seconds<10?s.elapsed_seconds.toFixed(1):Math.round(s.elapsed_seconds)} 秒`:''}`;
   $('tripSelect').innerHTML=s.trips.length?s.trips.map(t=>`<option value="${t.id}">第 ${t.number} 趟 · ${t.plaza_ids.length} 个地点${t.route?' · 已计算':''}</option>`).join(''):'<option value="">尚未分趟</option>';
   if(!s.trips.some(t=>t.id===state.tripId))state.tripId=s.trips.at(-1)?.id??null;
   $('tripSelect').value=state.tripId??'';$('tripSelect').disabled=state.busy;
   const assigned=new Set(s.trips.flatMap(t=>t.plaza_ids));
   const unfinished=s.trips.at(-1)&&(!s.trips.at(-1).route||(s.trips.at(-1).number>1&&!s.trips.at(-1).route.start));
   $('nextTrip').disabled=state.busy||s.status!=='complete'||(assigned.size===s.plazas.length&&!unfinished);
-  $('nextTrip').textContent=unfinished?'继续当前趟':'取下一趟';
+  $('nextTrip').textContent=state.planning?'正在规划连续路线…':unfinished?'继续当前趟':'取下一趟';
+  const plan=s.route_plan;$('continuousStatus').hidden=false;$('continuousStatus').textContent=plan?`全区域连续路线 · ${plan.order.length} 个地点 · ${plan.seconds.toFixed(1)} 秒规划 · 快速近似优化，未证明全局最优${plan.pending_road_ids.length?`。${plan.pending_road_ids.length} 个地点尚需相应路网，暂按邻近位置接在末段；计算对应批次时会核验并准备道路。`:''}`:s.trips.length?'这是旧版按方位分趟的路线。可复制这些地点生成连续路线，原有行程会保留。':'首次取行程会先快速规划全区域访问顺序，再按每趟地点数切分。';
+  $('continuousCopy').hidden=!s.trips.length||Boolean(plan);$('continuousCopy').disabled=state.busy;$('queueCaption').textContent=plan?'全区域连续访问顺序':'扫掠顺序';
   const t=currentTrip();$('tripPanel').hidden=!t;
   if(t){
     const frozen=s.trips.some(next=>next.number>t.number&&next.start);
     const stale=t.number>1&&t.route&&!t.route.start;
     const start=t.start??t.route?.start??s.config.origin;
     $('tripTitle').textContent=`第 ${t.number} 趟 · ${t.plaza_ids.length} 个新地点`;
-    $('tripDescription').textContent=`${start.previous_trip_number?`接续第 ${start.previous_trip_number} 趟终点 + `:'已确认起点 + '}${t.plaza_ids.length} 个新地点 · 队列 ${t.plaza_ids.map(id=>s.plazas.find(p=>p.id===id)?.rank).join('、')}${frozen?' · 后续行程已接续，路线已锁定':''}`;
+    $('tripDescription').textContent=`${start.previous_trip_number?`起点：${start.name??displayLabel(start.label??coordinateLabel(start.lat,start.lng))}（第 ${start.previous_trip_number} 趟${s.trips.find(previous=>previous.number===start.previous_trip_number)?.route?.return_to_origin?'返程终点':'最后一站'}）+ `:'已确认起点 + '}${t.plaza_ids.length} 个新地点 · 队列 ${t.plaza_ids.map(id=>visitRank(s,id)).join('、')}${frozen?' · 后续行程已接续，路线已锁定':''}`;
     $('calculate').disabled=state.busy||frozen;$('calculate').textContent=state.busy?'正在计算…':frozen?'路线已锁定':t.route?'重新计算路线':'计算路线';
-    $('returnOrigin').checked=t.route?.return_to_origin??false;$('returnOrigin').disabled=state.busy||frozen;
+    $('returnOrigin').checked=plan?false:t.route?.return_to_origin??false;$('returnOrigin').disabled=state.busy||frozen||Boolean(plan);
     $('routeError').textContent=t.error??(stale?'旧版路线尚未保存接续起点，请从前一趟起按顺序重新计算。':'');$('routeSummary').hidden=!t.route||stale;
     if(t.route&&!stale)renderRoute(t,start);
   }
   $('plazaList').replaceChildren();
   const times=Object.assign({},...s.trips.filter(t=>t.route).map(t=>Object.fromEntries(Object.entries(t.route.origin_seconds??{}).map(([id,seconds])=>[id,{seconds,number:t.number}]))));
-  for(const p of s.plazas){
+  const listed=plan?plan.order.map(id=>s.plazas.find(p=>p.id===id)):s.plazas;
+  for(const p of listed){
     const li=document.createElement('li');li.className='plaza'+(t?.plaza_ids.includes(p.id)?' current':'');
-    li.innerHTML=`<input type="checkbox" aria-label="在地图中选中 ${escapeHtml(p.name)}" ${state.selected.has(p.id)?'checked':''}><span class="rank">${p.rank}</span><div><h3><button class="place-preview-button" data-place-preview="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></h3><p>${escapeHtml(p.address)}</p><p class="distance">${s.config.discovery_kind==='offices'?`${({building:'楼宇',office_zone:'办公区',facility:'独立机构 / 医疗设施'})[p.entity_kind]??'办公 / 医疗地点'} · 已映射 ${p.company_count} 家公司 / 机构 · `:''}${p.distance_miles.toFixed(1)} 英里${times[p.id]!=null?` · 第 ${times[p.id].number} 趟起点驾车约 ${Math.ceil(times[p.id].seconds/60)} 分钟`:''}</p></div><button class="icon-button">${icon('share')}分享</button>`;
+    li.innerHTML=`<input type="checkbox" aria-label="在地图中选中 ${escapeHtml(p.name)}" ${state.selected.has(p.id)?'checked':''}><span class="rank">${visitRank(s,p.id)}</span><div><h3><button class="place-preview-button" data-place-preview="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button></h3><p>${escapeHtml(p.address)}</p><p class="distance">${s.config.discovery_kind==='offices'?`${({building:'楼宇',office_zone:'办公区',facility:'独立机构 / 医疗设施'})[p.entity_kind]??'办公 / 医疗地点'} · 已映射 ${p.company_count} 家公司 / 机构 · `:''}${p.distance_miles.toFixed(1)} 英里${times[p.id]!=null?` · 第 ${times[p.id].number} 趟起点驾车约 ${Math.ceil(times[p.id].seconds/60)} 分钟`:''}</p></div><button class="icon-button">${icon('share')}分享</button>`;
     li.querySelector('input').onchange=e=>{e.target.checked?state.selected.add(p.id):state.selected.delete(p.id);$('previewSelection').disabled=!state.selected.size;};
     li.querySelector('[data-place-preview]').onclick=()=>selectGooglePlace(p.id);
     li.querySelector('.icon-button').onclick=event=>sharePlaza(p,event.currentTarget);
@@ -180,8 +205,8 @@ function renderResults(){
 }
 function renderRoute(trip,start){
   const r=trip.route, byId=Object.fromEntries(state.scan.plazas.map(p=>[p.id,p]));
-  const startName=start.name??start.label??coordinateLabel(start.lat,start.lng);
-  $('routeSummary').innerHTML=`<div class="route-result"><strong>${Math.ceil(r.duration_seconds/60)} 分钟 <small>· ${(r.distance_meters/1609.344).toFixed(1)} 英里</small></strong><p>${escapeHtml(r.method)} · ${r.return_to_origin?'最后返回本趟起点':'在最后一个新地点结束'}</p><div class="route-start"><span class="stop-number start-number">起</span><div><strong>${escapeHtml(startName)}</strong><small>${start.previous_trip_number?`第 ${start.previous_trip_number} 趟终点，不占新地点名额`:'本趟固定起点'} · ${coordinateLabel(start.lat,start.lng)}</small></div>${start.id?`<button class="icon-button" data-share="${escapeHtml(start.id)}">${icon('share')}分享</button>`:''}</div><ol class="route-stops">${r.order.map((id,i)=>`<li><span class="stop-number">${i+1}</span><div><strong><button class="place-preview-button" data-place-preview="${escapeHtml(id)}">${escapeHtml(byId[id].name)}</button></strong><small>${escapeHtml(byId[id].address)}</small><small>本段 ${Math.ceil(r.legs_seconds[i]/60)} 分钟 · 队列 #${byId[id].rank}</small></div><button class="icon-button" data-share="${escapeHtml(id)}">${icon('share')}分享</button></li>`).join('')}${r.return_to_origin?`<li><span class="stop-number start-number">返</span><div><strong>返回本趟起点</strong><small>本段 ${Math.ceil(r.legs_seconds.at(-1)/60)} 分钟；下一趟从这里接续</small></div></li>`:''}</ol><div class="route-actions"><button id="openGoogleRoute" class="primary icon-button">${icon('route')}在 Google Maps 中打开</button><button id="previewRoute" class="icon-button">${icon('map')}地图预览</button></div><p>${escapeHtml(r.note)}</p></div>`;
+  const startName=start.name??displayLabel(start.label??coordinateLabel(start.lat,start.lng));
+  $('routeSummary').innerHTML=`<div class="route-result"><strong>${Math.ceil(r.duration_seconds/60)} 分钟 <small>· ${(r.distance_meters/1609.344).toFixed(1)} 英里</small></strong><p>${escapeHtml(r.method)} · ${r.return_to_origin?'最后返回本趟起点':'在最后一个新地点结束'}</p><div class="route-start"><span class="stop-number start-number">起</span><div><strong>${escapeHtml(startName)}</strong><small>${start.previous_trip_number?`第 ${start.previous_trip_number} 趟终点，不占新地点名额`:'本趟固定起点'} · ${coordinateLabel(start.lat,start.lng)}</small></div>${start.id?`<button class="icon-button" data-share="${escapeHtml(start.id)}">${icon('share')}分享</button>`:''}</div><ol class="route-stops">${r.order.map((id,i)=>`<li><span class="stop-number">${i+1}</span><div><strong><button class="place-preview-button" data-place-preview="${escapeHtml(id)}">${escapeHtml(byId[id].name)}</button></strong><small>${escapeHtml(byId[id].address)}</small><small>本段 ${Math.ceil(r.legs_seconds[i]/60)} 分钟 · 访问 #${visitRank(state.scan,id)}</small></div><button class="icon-button" data-share="${escapeHtml(id)}">${icon('share')}分享</button></li>`).join('')}${r.return_to_origin?`<li><span class="stop-number start-number">返</span><div><strong>返回本趟起点</strong><small>本段 ${Math.ceil(r.legs_seconds.at(-1)/60)} 分钟；下一趟从这里接续</small></div></li>`:''}</ol><div class="route-actions"><button id="openGoogleRoute" class="primary icon-button">${icon('route')}在 Google Maps 中打开</button><button id="previewRoute" class="icon-button">${icon('map')}地图预览</button></div><p>${escapeHtml(r.note)}</p></div>`;
   $('previewRoute').textContent='查看 OSRM 原路线';$('previewRoute').onclick=()=>openMap('route');
   $('routeSummary').querySelectorAll('[data-place-preview]').forEach(button=>button.onclick=()=>selectGooglePlace(button.dataset.placePreview));
   const googleButton=document.createElement('button');googleButton.className='icon-button';googleButton.innerHTML=icon('map')+'Google Maps 路线预览';googleButton.onclick=()=>{state.googleChoice='route';renderGooglePreview();$('googlePreview').scrollIntoView({behavior:'auto',block:'start'});};$('routeSummary').querySelector('.route-actions').append(googleButton);
@@ -253,7 +278,7 @@ function boundaryText(c){return c.mode==='polygon'?`绘制区域 · ${c.polygon.
 async function loadHistory(){
   const data=await api('/history?'+new URLSearchParams({q:$('historyQuery').value,status:$('historyStatus').value,offset:state.historyOffset}));
   $('historyList').innerHTML=data.items.length?'':'<p class="hint">暂无符合条件的历史记录。</p>';
-  for(const rec of data.items){const el=document.createElement('article');el.className='history-entry';el.innerHTML=`<div><h2>${escapeHtml(rec.config.origin.label)}</h2><p>${dateText(rec.created)} · ${escapeHtml(boundaryText(rec.config))}</p><p>${discoveryLabel(rec.config)} · ${rec.found} 个地点 · ${rec.trip_count} 趟 · ${statusNames[rec.status]}</p></div><div class="entry-actions"><button data-action="open">重新打开</button><button data-action="export">导出</button><button data-action="delete" class="text-button danger">删除</button></div>`;
+  for(const rec of data.items){const el=document.createElement('article');el.className='history-entry';el.innerHTML=`<div><h2>${escapeHtml(displayLabel(rec.config.origin.label))}</h2><p>${dateText(rec.created)} · ${escapeHtml(boundaryText(rec.config))}</p><p>${discoveryLabel(rec.config)} · ${rec.found} 个地点 · ${rec.trip_count} 趟 · ${statusNames[rec.status]}</p></div><div class="entry-actions"><button data-action="open">重新打开</button><button data-action="export">导出</button><button data-action="delete" class="text-button danger">删除</button></div>`;
     el.querySelector('[data-action=open]').onclick=()=>reopen(rec.id).catch(e=>toast(e.message));
     el.querySelector('[data-action=export]').onclick=()=>download(rec.id);
     el.querySelector('[data-action=delete]').onclick=()=>confirmDelete('删除这条搜索及其保存的行程和导出文件？定时计划不受影响。',async()=>{await api('/history/'+rec.id,{method:'DELETE'});if(state.scan?.id===rec.id)newSearch();await loadHistory();toast('记录已删除');});
@@ -270,7 +295,7 @@ function confirmDelete(text, action){confirmAction=action;$('confirmText').textC
 
 async function loadSchedules(){
   const {items}=await api('/schedules');$('scheduleList').innerHTML=items.length?'':'<p class="hint">尚无定时搜索。先在规划页确认起点与范围，再添加计划。</p>';
-  for(const spec of items){const el=document.createElement('article');el.className='schedule-entry';el.innerHTML=`<div><h2>${escapeHtml(spec.name)}</h2><p>${discoveryLabel(spec.config)} · ${escapeHtml(spec.config.origin.label)} · ${escapeHtml(boundaryText(spec.config))} · ${thresholdText(spec.config)}</p><p>${escapeHtml(spec.cron)} · ${escapeHtml(spec.timezone)} · ${spec.enabled?'已启用':'已停用'}</p><p>下次：${spec.enabled?dateText(spec.next_run):'已停用'}${spec.running?' · 正在搜索':''}</p><p>上次结果：${escapeHtml(spec.last_outcome??'尚未运行')}</p></div><div class="entry-actions"><button data-action="edit">编辑</button><button data-action="toggle">${spec.enabled?'停用':'启用'}</button><button data-action="delete" class="text-button danger">删除</button></div>`;
+  for(const spec of items){const el=document.createElement('article');el.className='schedule-entry';el.innerHTML=`<div><h2>${escapeHtml(spec.name)}</h2><p>${discoveryLabel(spec.config)} · ${escapeHtml(displayLabel(spec.config.origin.label))} · ${escapeHtml(boundaryText(spec.config))} · ${thresholdText(spec.config)}</p><p>${escapeHtml(spec.cron)} · ${escapeHtml(spec.timezone)} · ${spec.enabled?'已启用':'已停用'}</p><p>下次：${spec.enabled?dateText(spec.next_run):'已停用'}${spec.running?' · 正在搜索':''}</p><p>上次结果：${escapeHtml(spec.last_outcome??'尚未运行')}</p></div><div class="entry-actions"><button data-action="edit">编辑</button><button data-action="toggle">${spec.enabled?'停用':'启用'}</button><button data-action="delete" class="text-button danger">删除</button></div>`;
     el.querySelector('[data-action=edit]').onclick=()=>openSchedule(spec);
     el.querySelector('[data-action=toggle]').onclick=async()=>{try{const {id,next_run,running,last_outcome,...body}=spec;await api('/schedules/'+id,{method:'PUT',body:JSON.stringify({...body,enabled:!spec.enabled})});await loadSchedules();}catch(error){toast(error.message);}};
     el.querySelector('[data-action=delete]').onclick=()=>confirmDelete('删除此定时搜索？已保存的历史记录会保留。',async()=>{await api('/schedules/'+spec.id,{method:'DELETE'});await loadSchedules();});
@@ -279,7 +304,7 @@ async function loadSchedules(){
 function openSchedule(spec=null){
   clearErrors();const c=spec?.config??config();if(!c.origin?.confirmed||!validNumbers(c)||(c.mode==='polygon'&&c.polygon.length<3)){toast('请先在规划页确认起点与有效搜索范围。');return;}
   state.scheduleId=spec?.id??null;state.scheduleConfig=structuredClone(c);$('scheduleTitle').textContent=spec?'编辑定时搜索':'新增定时搜索';
-  $('scheduleName').value=spec?.name??c.origin.label.slice(0,100);$('scheduleArea').textContent=`${c.origin.label} · ${boundaryText(c)} · ${discoveryLabel(c)} · ${thresholdText(c)} · 每趟 ${c.batch_size} 个地点`;
+  $('scheduleName').value=spec?.name??displayLabel(c.origin.label).slice(0,100);$('scheduleArea').textContent=`${displayLabel(c.origin.label)} · ${boundaryText(c)} · ${discoveryLabel(c)} · ${thresholdText(c)} · 每趟 ${c.batch_size} 个地点`;
   $('scheduleTimezone').value=spec?.timezone??Intl.DateTimeFormat().resolvedOptions().timeZone??'America/New_York';
   $('scheduleEnabled').checked=spec?.enabled??true;$('frequency').value=spec?'advanced':'daily';$('cronExpression').value=spec?.cron??'0 9 * * *';frequencyChange();$('scheduleDialog').showModal();
 }
@@ -466,7 +491,7 @@ function drawMap(fit = false) {
   renderVertices(); mapInstructions();
 }
 function setDraftOrigin(origin, fit = true) {
-  locationRequest++; state.draft.origin = origin; $('mapAddress').value = origin.label??origin.name??coordinateLabel(origin.lat,origin.lng); $('confirmOrigin').checked = Boolean(origin.confirmed); state.moving = false; drawMap(fit);
+  locationRequest++; state.draft.origin = origin; $('mapAddress').value = displayLabel(origin.label??origin.name??coordinateLabel(origin.lat,origin.lng)); $('confirmOrigin').checked = Boolean(origin.confirmed); state.moving = false; drawMap(fit);
 }
 function mapInstructions() {
   const c = state.draft; if (!c) return;
@@ -482,7 +507,7 @@ function mapInstructions() {
   if(outside)$('mapValidation').textContent='起点必须位于绘制区域内或边界上，请移动起点或修改边界。';
   else if($('mapValidation').textContent.startsWith('起点必须'))$('mapValidation').textContent='';
   if(state.mapPurpose==='area')$('applyArea').disabled=Boolean(outside)||(c.mode==='polygon'&&(c.polygon.length<3||state.drawing))||!$('mapError').hidden;
-  $('mapOriginLabel').textContent = o ? `${(o.name??o.label)===coordinateLabel(o.lat,o.lng)?'':(o.name??o.label)+' · '}坐标 ${coordinateLabel(o.lat,o.lng)}${o.accuracy_m ? ` · 设备报告精度约 ±${Math.round(o.accuracy_m)} 米${o.accuracy_m>100 ? '，精度较低，请移动起点或核对后确认' : ''}` : ''}` : '尚未选择起点；请查找地址或点击“移动起点”放置。';
+  $('mapOriginLabel').textContent = o ? `${(o.name??o.label)===coordinateLabel(o.lat,o.lng)?'':displayLabel(o.name??o.label)+' · '}坐标 ${coordinateLabel(o.lat,o.lng)}${o.accuracy_m ? ` · 设备报告精度约 ±${Math.round(o.accuracy_m)} 米${o.accuracy_m>100 ? '，精度较低，请移动起点或核对后确认' : ''}` : ''}` : '尚未选择起点；请查找地址或点击“移动起点”放置。';
   $('confirmOriginLabel').hidden = state.mapPurpose !== 'area';
 }
 function renderVertices() {
@@ -507,10 +532,10 @@ function closeMap() {
 }
 
 document.querySelectorAll('.nav').forEach(el=>el.onclick=()=>view(el.dataset.view));
-document.querySelectorAll('#searchForm input').forEach(input=>input.addEventListener('input',()=>{if(input.id==='address'&&state.origin&&input.value!==state.origin.label){state.origin=null;$('addressMatches').replaceChildren();}syncForm();}));
+document.querySelectorAll('#searchForm input').forEach(input=>input.addEventListener('input',()=>{if(input.id==='address'&&state.origin&&input.value!==displayLabel(state.origin.label)){state.origin=null;$('addressMatches').replaceChildren();}syncForm();}));
 document.querySelectorAll('#searchForm input[type=number]').forEach(input=>input.addEventListener('input',()=>validateNumberInput(input.id)));
-$('lookup').onclick=()=>lookupAddress($('address'),$('addressMatches'),origin=>{state.origin=origin;$('address').value=origin.label;$('addressMatches').replaceChildren();$('error-origin').textContent='';syncForm();});
-$('publicLookup').onclick=()=>publicLookup($('address'),$('addressMatches'),origin=>{state.origin=origin;$('address').value=origin.label;$('addressMatches').replaceChildren();$('error-origin').textContent='';syncForm();});
+$('lookup').onclick=()=>lookupAddress($('address'),$('addressMatches'),origin=>{state.origin=origin;$('address').value=displayLabel(origin.label);$('addressMatches').replaceChildren();$('error-origin').textContent='';syncForm();});
+$('publicLookup').onclick=()=>publicLookup($('address'),$('addressMatches'),origin=>{state.origin=origin;$('address').value=displayLabel(origin.label);$('addressMatches').replaceChildren();$('error-origin').textContent='';syncForm();});
 $('address').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();$('lookup').click();}});
 $('newSearch').onclick=newSearch;$('openMap').onclick=()=>openMap();
 function locateCurrent(inMap=false){
@@ -543,7 +568,22 @@ $('cancelScan').onclick=async()=>{try{await post(`/scans/${state.scan.id}/cancel
 $('retryScan').onclick=async()=>{state.busy=true;renderResults();try{state.scan=await post(`/scans/${state.scan.id}/retry`);poll();}catch(error){toast(error.message);}finally{state.busy=false;renderResults();}};
 $('exportScan').onclick=()=>download(state.scan.id);
 document.querySelectorAll('[data-kind]').forEach(button=>button.onclick=()=>{if(state.discoveryKind===button.dataset.kind)return;state.discoveryKind=button.dataset.kind;for(const id of ['minShops','minCompanies'])if(!$(id).checkValidity()||$(id).value==='')$(id).value=3;clearErrors();newSearch();});
-$('nextTrip').onclick=async()=>{if(state.busy)return;state.busy=true;renderResults();try{state.scan=await post(`/scans/${state.scan.id}/trips`);state.tripId=state.scan.trips.at(-1)?.id;}catch(error){toast(error.message);}finally{state.busy=false;renderResults();}};
+async function takeNextTrip(){
+  if(state.busy)return;
+  const sid=state.scan.id;state.busy=true;state.planning=!state.scan.route_plan&&!state.scan.trips.length;renderResults();
+  try{for(;;){
+    const result=await post(`/scans/${sid}/trips`);
+    if(state.scan?.id!==sid)return;
+    if(!result.preparing){state.scan=result;state.tripId=state.scan.trips.at(-1)?.id;break;}
+    showCoverageStatus(result.coverage);await new Promise(resolve=>setTimeout(resolve,1500));
+  }}catch(error){toast(error.message);}finally{if(state.scan?.id===sid){state.busy=false;state.planning=false;renderResults();persist();}}
+}
+$('nextTrip').onclick=takeNextTrip;
+$('continuousCopy').onclick=async()=>{
+  if(state.busy)return;state.busy=true;renderResults();
+  try{const result=await post(`/scans/${state.scan.id}/continuous-copy`);state.scan=result;state.tripId=null;state.selected.clear();state.embedData=null;state.embedKey=null;state.googleChoice=null;restoreConfig(result.config);state.busy=false;renderResults();await takeNextTrip();}
+  catch(error){state.busy=false;renderResults();toast(error.message);}
+};
 $('tripSelect').onchange=()=>{state.tripId=$('tripSelect').value;renderResults();persist();};
 $('calculate').onclick=async()=>{if(state.busy)return;const closed=$('returnOrigin').checked,tid=state.tripId,sid=state.scan.id,token=Symbol('route');state.routeToken=token;state.busy=true;renderResults();
   try{let retry=true;for(;;){if(state.routeToken!==token)return;const result=await post(`/scans/${sid}/trips/${tid}/route`,{return_to_origin:closed,retry_coverage:retry});retry=false;
@@ -559,7 +599,7 @@ $('historyNext').onclick=()=>{state.historyOffset+=50;loadHistory().catch(e=>toa
 $('clearHistory').onclick=()=>confirmDelete('清空全部历史、行程及导出文件？定时搜索会保留，之后仍会产生新记录。',async()=>{await api('/history',{method:'DELETE'});state.scan=null;newSearch();await view('history');toast('历史已清空，定时搜索已保留');});
 $('confirmNo').onclick=()=>$('confirmDialog').close();$('confirmYes').onclick=async()=>{const action=confirmAction;$('confirmYes').disabled=true;try{await action();$('confirmDialog').close();}catch(error){toast(error.message);}finally{$('confirmYes').disabled=false;}};
 $('addSchedule').onclick=()=>openSchedule();$('closeSchedule').onclick=()=>$('scheduleDialog').close();$('frequency').onchange=frequencyChange;
-$('useCurrentSettings').onclick=()=>{const c=config();if(!c.origin?.confirmed||!validNumbers(c)||(c.mode==='polygon'&&c.polygon.length<3)){$('scheduleError').textContent='请先在规划页确认有效起点与搜索范围。';return;}state.scheduleConfig=structuredClone(c);$('scheduleArea').textContent=`${c.origin.label} · ${boundaryText(c)} · ${discoveryLabel(c)} · ${thresholdText(c)} · 每趟 ${c.batch_size} 个地点`;$('scheduleError').textContent='';};
+$('useCurrentSettings').onclick=()=>{const c=config();if(!c.origin?.confirmed||!validNumbers(c)||(c.mode==='polygon'&&c.polygon.length<3)){$('scheduleError').textContent='请先在规划页确认有效起点与搜索范围。';return;}state.scheduleConfig=structuredClone(c);$('scheduleArea').textContent=`${displayLabel(c.origin.label)} · ${boundaryText(c)} · ${discoveryLabel(c)} · ${thresholdText(c)} · 每趟 ${c.batch_size} 个地点`;$('scheduleError').textContent='';};
 $('scheduleForm').onsubmit=async event=>{event.preventDefault();clearErrors();const mode=$('frequency').value;const [hour,minute]=$('scheduleTime').value.split(':');
   const expression=mode==='advanced'?$('cronExpression').value:`${Number(minute)} ${Number(hour)} * * ${mode==='weekdays'?'1,2,3,4,5':mode==='weekly'?'1':'*'}`;
   $('saveSchedule').disabled=true;try{const body={name:$('scheduleName').value,config:state.scheduleConfig,cron:expression,timezone:$('scheduleTimezone').value,enabled:$('scheduleEnabled').checked};await api('/schedules'+(state.scheduleId?'/'+state.scheduleId:''),{method:state.scheduleId?'PUT':'POST',body:JSON.stringify(body)});$('scheduleDialog').close();await loadSchedules();toast('定时搜索已保存');}catch(error){showError(error,'scheduleError');}finally{$('saveSchedule').disabled=false;}};
@@ -588,8 +628,8 @@ $('nativeShare').onclick=async()=>{try{await navigator.share({title:$('shareName
 async function init(){
   try{state.bootstrap=await api('/bootstrap');
     let saved;try{saved=JSON.parse(localStorage.getItem('plaza-planner-draft')??'null');}catch{}
-    if(saved?.config){restoreConfig(saved.config);$('address').value=saved.address??$('address').value;state.tripId=saved.tripId;}
-    if(saved?.scanId){try{await reopen(saved.scanId);}catch{state.scan=null;syncForm();}if(saved.config){restoreConfig(saved.config);$('address').value=saved.address??$('address').value;}}
+    if(saved?.config){restoreConfig(saved.config);$('address').value=displayLabel(saved.address??$('address').value);state.tripId=saved.tripId;}
+    if(saved?.scanId){try{await reopen(saved.scanId);}catch{state.scan=null;syncForm();}if(saved.config){restoreConfig(saved.config);$('address').value=displayLabel(saved.address??$('address').value);}}
     syncForm();
   }catch(error){$('error-form').textContent=error.message;}
 }

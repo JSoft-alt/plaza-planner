@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 os.environ['OSRM_AUTO_DOWNLOAD']='0'
+os.environ['DISCOVERY_SOURCE']='overpass'
 import app
 import discovery
 from models import SearchInput, ScheduleInput, cron_trigger, projection, sweep
@@ -191,6 +192,14 @@ class Application(unittest.TestCase):
         saved_schedule=next(s for s in self.client.get('/api/schedules').json()['items'] if s['id']==response.json()['id'])
         self.assertEqual(saved_schedule['config']['discovery_kind'],'offices')
         self.assertEqual(saved_schedule['config']['min_companies'],3)
+
+    def test_road_prefetch_uses_only_the_first_batch(self):
+        sid=self.make_scan(count=20)
+        with patch.object(discovery,'run_scan'),patch.object(app.road_data,'request') as prepare:
+            app.run(sid)
+        points=prepare.call_args.args[0]
+        self.assertEqual(len(points),3)  # fixed origin + two new stops, not all 20
+        self.assertEqual(points[1],(plaza(1)['lng'],plaza(1)['lat']))
 
     def test_duplicate_batches_refresh_and_final_short_trip(self):
         sid=self.make_scan()

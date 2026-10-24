@@ -42,7 +42,7 @@ def request_osrm(service, points, **params):
     return payload
 
 
-def optimize(matrix, closed=False):
+def optimize(matrix, closed=False, fixed_end=None):
     size = len(matrix)
     n = size - 1
     if not 1 <= n <= MAX_STOPS or any(len(row) != size for row in matrix):
@@ -51,46 +51,43 @@ def optimize(matrix, closed=False):
         raise ValueError("驾驶时间矩阵包含不可达或无效的值。")
     if any(matrix[i][i] != 0 for i in range(size)):
         raise ValueError("驾驶时间矩阵格式无效。")
+    if fixed_end is not None and (closed or type(fixed_end) is not int or not 1<=fixed_end<=n):
+        raise ValueError('固定衔接终点无效。')
     costs = [[round(v * 1000) for v in row] for row in matrix]
-    end = 0 if closed else size
-    manager = pywrapcp.RoutingIndexManager(size if closed else size + 1, 1, [0], [end])
-    model = pywrapcp.RoutingModel(manager)
-
-    def transit(a, b):
-        source, target = manager.IndexToNode(a), manager.IndexToNode(b)
-        return 0 if target == size else costs[source][target]
-
-    model.SetArcCostEvaluatorOfAllVehicles(model.RegisterTransitCallback(transit))
-    params = pywrapcp.DefaultRoutingSearchParameters()
-    params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    params.time_limit.seconds = 1 if n <= EXACT_LIMIT else 3
-    solution = model.SolveWithParameters(params)
-    if solution is None:
-        raise ValueError("未找到可行路线，请减少每趟地点数后重试。")
-    cursor, order = model.Start(0), []
-    while not model.IsEnd(cursor):
-        node = manager.IndexToNode(cursor)
-        if node != 0:
-            order.append(node)
-        cursor = solution.Value(model.NextVar(cursor))
-    optimal = n <= EXACT_LIMIT
-    if optimal:
+    if n <= EXACT_LIMIT:
         @lru_cache(maxsize=None)
-        def best(mask, last):
-            bit = 1 << (last - 1)
-            if mask == bit:
-                return costs[0][last], (last,)
-            prior = mask ^ bit
-            return min((best(prior, p)[0] + costs[p][last], best(prior, p)[1] + (last,))
-                       for p in range(1, n + 1) if prior & (1 << (p - 1)))
-        _, path = min((best((1 << n) - 1, last)[0] + (costs[last][0] if closed else 0),
-                       best((1 << n) - 1, last)[1]) for last in range(1, n + 1))
-        order = list(path)
-    return order, optimal
+        def best(mask,last):
+            bit=1 << (last-1)
+            if mask==bit:return costs[0][last],(last,)
+            prior=mask ^ bit
+            return min((best(prior,p)[0]+costs[p][last],best(prior,p)[1]+(last,))
+                       for p in range(1,n+1) if prior & (1 << (p-1)))
+        ends=[fixed_end] if fixed_end is not None else range(1,n+1)
+        _,path=min((best((1<<n)-1,last)[0]+(costs[last][0] if closed else 0),best((1<<n)-1,last)[1]) for last in ends)
+        return list(path),True
+    end=0 if closed else fixed_end if fixed_end is not None else size
+    manager=pywrapcp.RoutingIndexManager(size if closed or fixed_end is not None else size+1,1,[0],[end])
+    model=pywrapcp.RoutingModel(manager)
+    def transit(a,b):
+        source,target=manager.IndexToNode(a),manager.IndexToNode(b)
+        return 0 if target==size else costs[source][target]
+    model.SetArcCostEvaluatorOfAllVehicles(model.RegisterTransitCallback(transit))
+    params=pywrapcp.DefaultRoutingSearchParameters()
+    params.first_solution_strategy=routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    params.local_search_metaheuristic=routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    params.time_limit.seconds=3
+    solution=model.SolveWithParameters(params)
+    if solution is None:raise ValueError('未找到可行路线，请减少每趟地点数后重试。')
+    cursor=model.Start(0);order=[]
+    while not model.IsEnd(cursor):
+        node=manager.IndexToNode(cursor)
+        if node:order.append(node)
+        cursor=solution.Value(model.NextVar(cursor))
+    if fixed_end is not None:order.append(fixed_end)
+    return order,False
 
 
-def calculate(config, stops, closed=False, start=None, osrm_url=None):
+def calculate(config, stops, closed=False, start=None, osrm_url=None, fixed_end_id=None):
     start = dict(start or config.origin.model_dump(mode="json"))
     points = [(start["lng"], start["lat"])] + [(p["lng"], p["lat"]) for p in stops]
     table = request_osrm("table", points, annotations="duration", **({"_base_url": osrm_url} if osrm_url else {}))
@@ -98,7 +95,9 @@ def calculate(config, stops, closed=False, start=None, osrm_url=None):
     matrix = table.get("durations")
     if not isinstance(matrix, list) or len(matrix) != len(points) or any(not isinstance(r, list) for r in matrix):
         raise ValueError("驾驶时间矩阵格式无效。")
-    order, optimal = optimize(matrix, closed)
+    fixed_end=next((i+1 for i,p in enumerate(stops) if p["id"]==fixed_end_id),None) if fixed_end_id else None
+    if fixed_end_id and fixed_end is None:raise ValueError("衔接终点不在本趟中。")
+    order, optimal = optimize(matrix, closed, fixed_end=fixed_end) if fixed_end is not None else optimize(matrix,closed)
     line_points = [points[0]] + [points[i] for i in order] + ([points[0]] if closed else [])
     route = request_osrm("route", line_points, overview="full", geometries="geojson", steps="false", continue_straight="false", **({"_base_url": osrm_url} if osrm_url else {}))
     validate_waypoints(route, len(line_points), ("waypoints",))
@@ -125,5 +124,5 @@ def calculate(config, stops, closed=False, start=None, osrm_url=None):
                 duration_seconds=road["duration"], distance_meters=road["distance"], geometry=geometry,
                 legs_seconds=[leg["duration"] for leg in legs],
                 origin_seconds={stop["id"]: matrix[0][i + 1] for i, stop in enumerate(stops)},
-                method="精确最优（矩阵毫秒精度）" if optimal else "3 秒限时优化，未证明最优",
+                method=("连续路线 · 固定衔接点下精确优化" if fixed_end is not None else "精确最优（矩阵毫秒精度）") if optimal else "3 秒限时优化，未证明最优",
                 note="基于本地路网的预计驾驶时间，不含实时交通；地点以边界内点表示，未验证入口。")

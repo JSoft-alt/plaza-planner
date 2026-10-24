@@ -18,7 +18,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -q
       - run: node --check static/app.js
-      - run: node --test tests/test_map_geometry.cjs tests/test_native_share.cjs tests/test_search_feedback.cjs
+      - run: node --test tests/test_map_geometry.cjs tests/test_native_share.cjs tests/test_search_feedback.cjs tests/test_display_label.cjs
       - if: runner.os == 'Linux'
         run: docker compose config --quiet
       - if: runner.os == 'Windows'
